@@ -1,0 +1,67 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+logs/
+dist/
+build/
+
+# Ignore local environment and secret files
+.env
+.env.*
+*.env
+*.local
+*.secret
+*.secrets
+.envrc
+!.env.example
+
+# Ignore credentials and secret material
+secrets/
+company-secrets/
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.csr
+*.der
+*.token
+*secret*
+*token*
+*credential*
+*credentials*
+*creds*
+service-account*.json
+
+# Ignore IDE-specific files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Ignore OS-specific files
+.DS_Store
+Thumbs.db
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore virtual environment directories
+venv/
+env/
+
+# .history
+.history/
+
+# Ignore local analysis output
+.scannerwork/
+.sonar/
+.sonarlint/
+.sonar-scanner-dump.properties

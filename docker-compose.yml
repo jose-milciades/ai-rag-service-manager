@@ -1,0 +1,15 @@
+services:
+  ai-rag-service-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-rag-service-manager
+    env_file:
+      - /opt/edi/company-secrets/${SERVER_DEPLOYMENT:-dev}/common.env
+      - /opt/edi/company-secrets/${SERVER_DEPLOYMENT:-dev}/storage.env
+      - /opt/edi/company-secrets/${SERVER_DEPLOYMENT:-dev}/ai-rag-service-manager.env
+    ports:
+      - "${API_PORT:-8000}:${API_PORT:-8000}"
+    volumes:
+      - /opt/edi/company-secrets/${SERVER_DEPLOYMENT:-dev}/edward-creds.json:/app/edward-creds.json:ro
+    restart: unless-stopped
