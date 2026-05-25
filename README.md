@@ -192,7 +192,6 @@ Con `uv`:
 
 ```bash
 uv sync
-cp .env.example .env
 uv run python -m app.main
 ```
 
@@ -202,9 +201,86 @@ Con `venv` tradicional:
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .[dev]
-cp .env.example .env
 python -m app.main
 ```
+
+Con secretos fuera del repositorio:
+
+El proyecto puede arrancar sin `.env` dentro del repositorio si cargas las variables de entorno desde una carpeta hermana usando `run-local.sh`.
+
+El script usa por defecto esta ruta relativa al microservicio:
+
+```text
+../company-secrets/${SERVER_DEPLOYMENT:-dev}
+```
+
+Con la estructura real local:
+
+```text
+PROYECTO/
+├── ai-rag-service-manager/
+└── company-secrets/
+	├── dev/
+	│   ├── common.env
+	│   ├── storage.env
+	│   ├── ai-rag-service-manager.env
+	│   └── edward-creds.json
+	├── qa/
+	└── prod/
+```
+
+En `dev`, por ejemplo, el script intentara leer:
+
+- `../company-secrets/dev/common.env`
+- `../company-secrets/dev/storage.env`
+- `../company-secrets/dev/ai-rag-service-manager.env`
+- `../company-secrets/dev/edward-creds.json`
+
+Arranque local por defecto:
+
+```bash
+chmod +x run-local.sh
+./run-local.sh
+```
+
+El script hace esto:
+
+- carga `common.env`, `storage.env` y `ai-rag-service-manager.env` desde `../company-secrets/${SERVER_DEPLOYMENT:-dev}`;
+- exporta las variables al proceso antes de arrancar el microservicio;
+- si existe `edward-creds.json` y no definiste `GOOGLE_APPLICATION_CREDENTIALS`, lo configura automaticamente;
+- arranca el servicio con `uv run python -m app.main`.
+
+Cambiar el ambiente sin tocar el script:
+
+```bash
+SERVER_DEPLOYMENT=qa ./run-local.sh
+```
+
+```bash
+SERVER_DEPLOYMENT=prod ./run-local.sh
+```
+
+Usar una ruta completamente distinta para secretos:
+
+```bash
+SECRETS_DIR=/ruta/a/tus/envs ./run-local.sh
+```
+
+Ejecutar otro comando con las variables ya cargadas:
+
+```bash
+./run-local.sh env | grep '^APP_'
+```
+
+```bash
+./run-local.sh uv run python -m app.main
+```
+
+Nota de precedencia:
+
+- las variables exportadas por el shell y por `run-local.sh` son las que toma la aplicacion al arrancar;
+- el archivo `.env` definido en `Settings` queda como fallback, no como requisito;
+- si defines `SECRETS_DIR`, esa ruta tiene prioridad sobre `SERVER_DEPLOYMENT`.
 
 Documentación automática:
 
