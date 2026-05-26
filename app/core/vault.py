@@ -12,7 +12,7 @@ class VaultClient:
             token=os.getenv("VAULT_TOKEN"),
         )
         if not self.client.is_authenticated():
-            raise Exception("Vault authentication failed")
+            raise ValueError("Vault authentication failed")
 
     def get_secret(self, path: str) -> dict:
 
