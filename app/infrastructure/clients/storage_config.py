@@ -6,8 +6,7 @@ dispersos entre servicios, clients y wiring.
 """
 
 import json
-import os
-from pathlib import Path
+from typing import Any
 
 from app.core.config import Settings
 
@@ -15,39 +14,41 @@ from app.core.config import Settings
 class StorageConfig:
     """Configuracion normalizada para integraciones de storage."""
 
-    _default_credentials_file = Path("edward-creds.json")
-
     def __init__(self, settings: Settings) -> None:
-        self.google_json_cred = settings.google_application_credentials or self._get_default_credentials_path()
-        self.project_id = settings.storage_project_id or self._get_project_id_from_credentials_file()
+        self.google_json_cred = settings.google_creds_json
+        self.credentials_info = self._load_credentials_info()
         self.default_bucket_name = settings.storage_default_bucket_name
-        self.public_bucket_name = settings.storage_public_bucket_name
+        self.public_bucket_name = getattr(settings, "storage_public_bucket_name", None)
+        self.project_id = settings.storage_project_id or self._get_project_id_from_credentials_info()
         self.chunk_upload_temp_dir = settings.storage_chunk_upload_temp_dir
+        self._validate_credentials_configuration()
 
-    def apply_credentials_environment(self) -> None:
-        if self.google_json_cred:
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = self.google_json_cred
+    def has_credentials_info(self) -> bool:
+        return self.credentials_info is not None
 
-    def credentials_file_exists(self) -> bool:
-        return bool(self.google_json_cred and Path(self.google_json_cred).exists())
+    def _get_project_id_from_credentials_info(self) -> str | None:
+        if not self.credentials_info:
+            return None
 
-    def _get_default_credentials_path(self) -> str | None:
-        if self._default_credentials_file.exists():
-            return str(self._default_credentials_file)
-        return None
+        project_id = self.credentials_info.get("project_id")
+        return project_id if isinstance(project_id, str) and project_id else None
 
-    def _get_project_id_from_credentials_file(self) -> str | None:
+    def _load_credentials_info(self) -> dict[str, Any] | None:
         if not self.google_json_cred:
             return None
 
-        credentials_path = Path(self.google_json_cred)
-        if not credentials_path.exists():
-            return None
-
         try:
-            credentials = json.loads(credentials_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
+            credentials = json.loads(self.google_json_cred)
+        except json.JSONDecodeError as exc:
+            raise ValueError("GOOGLE_CREDS_JSON must contain a valid JSON object") from exc
 
-        project_id = credentials.get("project_id")
-        return project_id if isinstance(project_id, str) and project_id else None
+        if not isinstance(credentials, dict):
+            raise ValueError("GOOGLE_CREDS_JSON must contain a JSON object")
+
+        return credentials
+
+    def _validate_credentials_configuration(self) -> None:
+        if self.google_json_cred and not self.project_id:
+            raise ValueError(
+                "Storage credentials require project_id in GOOGLE_CREDS_JSON or STORAGE_PROJECT_ID"
+            )

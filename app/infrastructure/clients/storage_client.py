@@ -129,12 +129,16 @@ class StorageClient:
 
         try:
             from google.cloud import storage
+            from google.oauth2 import service_account
         except ImportError as exc:
             raise RuntimeError("google-cloud-storage is not installed") from exc
 
-        self._config.apply_credentials_environment()
         client_kwargs = {}
         if self._config.project_id:
             client_kwargs["project"] = self._config.project_id
+        if self._config.has_credentials_info():
+            client_kwargs["credentials"] = service_account.Credentials.from_service_account_info(
+                self._config.credentials_info
+            )
         self._client = storage.Client(**client_kwargs)
         return self._client

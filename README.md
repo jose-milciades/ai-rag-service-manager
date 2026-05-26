@@ -213,6 +213,25 @@ pip install -e .[dev]
 python -m app.main
 ```
 
+## Configuracion de Vault
+
+El microservicio obtiene su configuracion desde Vault al arrancar. Antes de ejecutar el servicio, define estas variables de entorno:
+
+```bash
+export VAULT_ADDR=http://localhost:8200
+export VAULT_TOKEN=root-token
+```
+
+Si quieres dejarlas persistentes en tu shell:
+
+```bash
+echo 'export VAULT_ADDR=http://localhost:8200' >> ~/.bashrc
+echo 'export VAULT_TOKEN=root-token' >> ~/.bashrc
+source ~/.bashrc
+```
+
+Si usas otro host o token, reemplaza esos valores por los de tu entorno.
+
 Con secretos fuera del repositorio:
 
 El proyecto puede arrancar sin `.env` dentro del repositorio si cargas las variables de entorno desde una carpeta hermana usando `run-local.sh`.
@@ -232,8 +251,7 @@ PROYECTO/
 	├── dev/
 	│   ├── common.env
 	│   ├── storage.env
-	│   ├── ai-rag-service-manager.env
-	│   └── edward-creds.json
+	│   └── ai-rag-service-manager.env
 	├── qa/
 	└── prod/
 ```
@@ -243,12 +261,13 @@ En `dev`, por ejemplo, el script intentara leer:
 - `../company-secrets/dev/common.env`
 - `../company-secrets/dev/storage.env`
 - `../company-secrets/dev/ai-rag-service-manager.env`
-- `../company-secrets/dev/edward-creds.json`
 
 Arranque local por defecto:
 
 ```bash
 chmod +x run-local.sh
+export VAULT_ADDR=http://localhost:8200
+export VAULT_TOKEN=root-token
 ./run-local.sh
 ```
 
@@ -256,7 +275,7 @@ El script hace esto:
 
 - carga `common.env`, `storage.env` y `ai-rag-service-manager.env` desde `../company-secrets/${SERVER_DEPLOYMENT:-dev}`;
 - exporta las variables al proceso antes de arrancar el microservicio;
-- si existe `edward-creds.json` y no definiste `GOOGLE_APPLICATION_CREDENTIALS`, lo configura automaticamente;
+- espera que `GOOGLE_CREDS_JSON` ya venga definido como JSON inline en alguno de esos archivos o desde Vault;
 - arranca el servicio con `uv run python -m app.main`.
 
 Cambiar el ambiente sin tocar el script:
@@ -356,16 +375,21 @@ Recomendaciones para mantener el análisis limpio:
 ```bash
 docker build -t ai-rag-service-manager .
 docker run --rm -p 8000:8000 --env-file .env \
-	-v "$(pwd)/edward-creds.json:/app/edward-creds.json:ro" \
+	-e VAULT_ADDR=http://localhost:8200 \
+	-e VAULT_TOKEN=root-token \
 	ai-rag-service-manager
 ```
 
 Nota: en `docker run` el mapeo `-p` no se ajusta automaticamente leyendo `.env`; si cambias `API_PORT`, ajusta tambien el `-p host:container`.
 
+Para storage, define `GOOGLE_CREDS_JSON` en el `.env` o en la configuracion cargada desde Vault con el contenido completo del service account JSON en una sola variable.
+
 Con Compose:
 
 ```bash
 export SERVER_DEPLOYMENT=dev
+export VAULT_ADDR=http://localhost:8200
+export VAULT_TOKEN=root-token
 docker compose up --build
 ```
 
@@ -378,8 +402,7 @@ PROYECTO/
 	└── dev/
 		├── common.env
 		├── storage.env
-		├── ai-rag-service-manager.env
-		└── edward-creds.json
+		└── ai-rag-service-manager.env
 ```
 
 Si `SERVER_DEPLOYMENT` no esta definido, Compose usa `dev` por defecto.

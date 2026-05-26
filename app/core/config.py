@@ -1,13 +1,14 @@
 from functools import lru_cache
 
+
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.vault import get_vault_client
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
         extra="ignore",
         populate_by_name=True,
     )
@@ -15,7 +16,7 @@ class Settings(BaseSettings):
     debug: bool = Field(default=False, validation_alias=AliasChoices("DEBUG"))
     app_name: str = Field(
         default="ai-rag-service-manager",
-        validation_alias=AliasChoices("APP_NAME", "EUREKA_APP_NAME"),
+        validation_alias=AliasChoices("EUREKA_APP_NAME"),
     )
     app_env: str = Field(default="development", validation_alias=AliasChoices("APP_ENV"))
     app_host: str = Field(
@@ -58,7 +59,7 @@ class Settings(BaseSettings):
     )
     eureka_app_name: str = Field(
         default="ai-rag-service-manager",
-        validation_alias=AliasChoices("EUREKA_APP_NAME", "APP_NAME"),
+        validation_alias=AliasChoices("EUREKA_APP_NAME"),
     )
     eureka_instance_host: str = Field(
         default="ai-rag-service-manager",
@@ -77,9 +78,9 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("EUREKA_REGISTER_RETRY_DELAY", "REGISTER_RETRY_DELAY"),
     )
 
-    google_application_credentials: str | None = Field(
+    google_creds_json: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_JSON_CREDENTIALS"),
+        validation_alias=AliasChoices("GOOGLE_CREDS_JSON"),
     )
     storage_project_id: str | None = Field(
         default=None,
@@ -88,10 +89,6 @@ class Settings(BaseSettings):
     storage_default_bucket_name: str | None = Field(
         default=None,
         validation_alias=AliasChoices("STORAGE_DEFAULT_BUCKET_NAME"),
-    )
-    storage_public_bucket_name: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("STORAGE_PUBLIC_BUCKET_NAME"),
     )
     storage_chunk_upload_temp_dir: str = Field(
         default=".runtime/uploads",
@@ -170,4 +167,7 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    vault = get_vault_client()
+    config = vault.load_configs(["common", "ai-rag-service-manager", "storage"])
+    # print("Loaded configuration keys from Vault:\n" + "\n".join(sorted(config.keys())))
+    return Settings(**config)
