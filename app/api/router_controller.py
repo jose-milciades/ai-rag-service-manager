@@ -10,9 +10,11 @@ from app.api.routes import (
     embedding_controller,
     health_controller,
     rag_services_controller,
+    storage_controller,
 )
 
 api_router = APIRouter()
 api_router.include_router(health_controller.router)
 api_router.include_router(rag_services_controller.router)
 api_router.include_router(embedding_controller.router)
+api_router.include_router(storage_controller.router)

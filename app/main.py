@@ -8,8 +8,8 @@ from app.api.router_controller import api_router
 from app.api.dependencies.services import get_storage_client
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
-from app.infrastructure.external_clients.config_server import ConfigServerClient
-from app.infrastructure.external_clients.eureka import EurekaRegistrar
+from app.infrastructure.clients.config_server import ConfigServerClient
+from app.infrastructure.clients.eureka import EurekaRegistrar
 
 
 @asynccontextmanager

@@ -1,14 +1,19 @@
-"""Configuracion de acceso a Google Cloud Storage."""
+"""Storage-specific configuration adapter.
+
+La fuente de verdad sigue siendo ``app.core.config.Settings``. Este adaptador
+solo concentra los parametros tecnicos de storage para evitar que queden
+dispersos entre servicios, clients y wiring.
+"""
 
 import json
-from pathlib import Path
 import os
+from pathlib import Path
 
 from app.core.config import Settings
 
 
 class StorageConfig:
-    """Adaptador de configuracion compatible con otros microservicios."""
+    """Configuracion normalizada para integraciones de storage."""
 
     _default_credentials_file = Path("edward-creds.json")
 
@@ -16,6 +21,8 @@ class StorageConfig:
         self.google_json_cred = settings.google_application_credentials or self._get_default_credentials_path()
         self.project_id = settings.storage_project_id or self._get_project_id_from_credentials_file()
         self.default_bucket_name = settings.storage_default_bucket_name
+        self.public_bucket_name = settings.storage_public_bucket_name
+        self.chunk_upload_temp_dir = settings.storage_chunk_upload_temp_dir
 
     def apply_credentials_environment(self) -> None:
         if self.google_json_cred:

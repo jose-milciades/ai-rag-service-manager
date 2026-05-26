@@ -90,24 +90,27 @@ ai-rag-service-manager/
 │   │   └── repositories/
 │   │       └── rag_service_repository.py
 │   ├── infrastructure/
-│   │   ├── external_clients/
+│   │   ├── clients/
 │   │   │   ├── config_server.py
 │   │   │   ├── eureka.py
-│   │   │   └── storage_client.py
+│   │   │   ├── storage_client.py
+│   │   │   └── storage_config.py
 │   │   ├── repositories/
 │   │   │   └── in_memory_rag_service_repository.py
 │   │   └── vector_store/
 │   │       └── vector_store_manager.py
 │   ├── schemas/
 │   │   ├── embedding.py
-│   │   └── rag_service.py
+│   │   ├── rag_service.py
+│   │   └── storage.py
 │   ├── services/
 │   │   ├── embedding/
 │   │   │   └── document_embedding_service.py
 │   │   ├── rag/
 │   │   │   ├── rag_agent.py
 │   │   │   └── rag_service.py
-│   │   └── rag_service.py
+│   │   ├── rag_service.py
+│   │   └── storage_service.py
 │   └── main.py
 ├── .env.example
 ├── Dockerfile
@@ -121,7 +124,13 @@ ai-rag-service-manager/
 2. `app/api/router_controller.py` compone los controllers HTTP.
 3. Los controllers resuelven dependencias desde `app/api/dependencies/services.py`.
 4. Los servicios aplican la lógica de negocio o de aplicación.
-5. La infraestructura aporta repositorios, clientes externos y acceso al vector store.
+5. La infraestructura aporta repositorios, clients tecnicos y acceso al vector store.
+
+### Convencion de infraestructura
+
+- `clients`: conexiones a SDKs y APIs externas
+- `repositories`: implementaciones concretas de persistencia del dominio
+- `vector_store`: adapters tecnicos para backends vectoriales
 
 ## Componentes clave
 

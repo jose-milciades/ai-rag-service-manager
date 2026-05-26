@@ -89,6 +89,14 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("STORAGE_DEFAULT_BUCKET_NAME"),
     )
+    storage_public_bucket_name: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("STORAGE_PUBLIC_BUCKET_NAME"),
+    )
+    storage_chunk_upload_temp_dir: str = Field(
+        default=".runtime/uploads",
+        validation_alias=AliasChoices("STORAGE_CHUNK_UPLOAD_TEMP_DIR"),
+    )
 
     vector_db_type: str = Field(default="memory", validation_alias=AliasChoices("VECTOR_DB_TYPE"))
     milvus_host: str = Field(default="localhost", validation_alias=AliasChoices("MILVUS_HOST"))

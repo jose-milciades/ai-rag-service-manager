@@ -17,7 +17,7 @@ import logging
 from typing import Any
 
 from app.core.config import Settings
-from app.infrastructure.external_clients.storage_client import StorageClient
+from app.infrastructure.clients.storage_client import StorageClient
 from app.infrastructure.vector_store.vector_store_manager import VectorStoreManager
 from app.services.rag.rag_service import RAGService
 
