@@ -222,6 +222,20 @@ export VAULT_ADDR=http://localhost:8200
 export VAULT_TOKEN=root-token
 ```
 
+Si Vault expone HTTPS con un certificado firmado por una CA interna, define tambien:
+
+```bash
+export VAULT_CACERT=/ruta/al/ca.pem
+```
+
+Si el endpoint interno usa HTTPS pero el certificado no fue emitido para el hostname del contenedor, puedes desactivar la verificacion TLS para esa conexion:
+
+```bash
+export VAULT_SKIP_VERIFY=true
+```
+
+Usa `VAULT_SKIP_VERIFY` solo cuando no puedas corregir el certificado o el nombre DNS del servicio.
+
 Si quieres dejarlas persistentes en tu shell:
 
 ```bash

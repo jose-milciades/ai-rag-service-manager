@@ -4,10 +4,16 @@ import hvac
 from functools import lru_cache
 
 
+def _is_truthy(value: str | None) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 class VaultClient:
     def __init__(self):
         vault_addr = os.getenv("VAULT_ADDR")
         vault_token = os.getenv("VAULT_TOKEN")
+        vault_cacert = os.getenv("VAULT_CACERT")
+        vault_skip_verify = _is_truthy(os.getenv("VAULT_SKIP_VERIFY"))
 
         missing_env_vars = [
             env_name
@@ -19,11 +25,24 @@ class VaultClient:
             missing_values = ", ".join(missing_env_vars)
             raise ValueError(f"Missing Vault environment variables: {missing_values}")
 
+        verify = False if vault_skip_verify else (vault_cacert or True)
+
         self.client = hvac.Client(
             url=vault_addr,
             token=vault_token,
+            verify=verify,
         )
-        if not self.client.is_authenticated():
+
+        try:
+            is_authenticated = self.client.is_authenticated()
+        except Exception as exc:
+            raise ValueError(
+                f"Vault connection failed for VAULT_ADDR={vault_addr}. "
+                "If Vault uses internal TLS, configure VAULT_CACERT or set "
+                "VAULT_SKIP_VERIFY=true."
+            ) from exc
+
+        if not is_authenticated:
             raise ValueError(
                 f"Vault authentication failed for VAULT_ADDR={vault_addr}. "
                 "Verify that VAULT_TOKEN is valid and was injected into the container."
