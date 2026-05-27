@@ -1,11 +1,18 @@
 import os
 import hvac
+import urllib3
 
 from functools import lru_cache
+from urllib3.exceptions import InsecureRequestWarning
 
 
 def _is_truthy(value: str | None) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _configure_tls_warning_suppression(vault_skip_verify: bool) -> None:
+    if vault_skip_verify:
+        urllib3.disable_warnings(InsecureRequestWarning)
 
 
 class VaultClient:
@@ -26,6 +33,8 @@ class VaultClient:
             raise ValueError(f"Missing Vault environment variables: {missing_values}")
 
         verify = False if vault_skip_verify else (vault_cacert or True)
+
+        _configure_tls_warning_suppression(vault_skip_verify)
 
         self.client = hvac.Client(
             url=vault_addr,

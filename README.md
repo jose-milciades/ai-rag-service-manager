@@ -235,6 +235,7 @@ export VAULT_SKIP_VERIFY=true
 ```
 
 Usa `VAULT_SKIP_VERIFY` solo cuando no puedas corregir el certificado o el nombre DNS del servicio.
+Cuando este valor esta activo, la aplicacion tambien silencia el `InsecureRequestWarning` de `urllib3` para evitar ruido repetitivo en logs.
 
 Si quieres dejarlas persistentes en tu shell:
 
