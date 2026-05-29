@@ -1,8 +1,7 @@
 FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    GOOGLE_APPLICATION_CREDENTIALS=edward-creds.json
+    PYTHONUNBUFFERED=1 
 
 WORKDIR /app
 
