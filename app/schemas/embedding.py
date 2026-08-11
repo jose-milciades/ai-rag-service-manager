@@ -6,7 +6,6 @@ from app.core.config import get_settings
 from app.core.schema import get_camel_case_config
 
 INDEX_VECSTORE_DESCRIPTION = "Nombre del índice/colección"
-settings = get_settings()
 
 
 class SaveDocumentVecstoreRequest(BaseModel):
@@ -35,7 +34,7 @@ class ListDocumentsRequest(BaseModel):
     model_config = get_camel_case_config()
 
     index_vecstore: str = Field(..., description=INDEX_VECSTORE_DESCRIPTION)
-    limit: int = Field(settings.rag_default_list_limit, ge=1, le=1000)
+    limit: int = Field(default_factory=lambda: get_settings().rag_default_list_limit, ge=1, le=1000)
     metadata_filter: dict[str, Any] | None = Field(default=None, description="Filtros por metadata")
 
 
@@ -51,7 +50,7 @@ class SearchSimilarDocumentsRequest(BaseModel):
 
     index_vecstore: str = Field(..., description=INDEX_VECSTORE_DESCRIPTION)
     query: str = Field(..., description="Consulta para búsqueda semántica")
-    top_k: int = Field(settings.rag_default_top_k, ge=1, le=100)
+    top_k: int = Field(default_factory=lambda: get_settings().rag_default_top_k, ge=1, le=100)
     metadata_filter: dict[str, Any] | None = Field(default=None, description="Filtros por metadata")
 
 
@@ -59,7 +58,7 @@ class RagQueryRequest(BaseModel):
     model_config = get_camel_case_config()
 
     question: str = Field(..., description="Pregunta a responder")
-    top_k: int = Field(settings.rag_default_top_k, ge=1, le=100)
+    top_k: int = Field(default_factory=lambda: get_settings().rag_default_top_k, ge=1, le=100)
     department: str | None = Field(default=None, description="Filtro lógico por departamento")
 
 

@@ -25,7 +25,7 @@ Cómo usarlo:
 | P-09 | `InMemoryRagServiceRepository` sin persistencia real | Baja | Pendiente |
 | P-10 | `storage-upload-vectorization` sin integrar (marcado en código) | Baja | Pendiente |
 | P-11 | `storage-chunk-consolidation` sin integrar (marcado en código) | Baja | Pendiente |
-| P-12 | Acoplamiento import-time con Vault en `app/schemas/embedding.py` | Baja | Pendiente |
+| P-12 | Acoplamiento import-time con Vault en `app/schemas/embedding.py` | Baja | Resuelto |
 | P-13 | CORS abierto (`*`) + `allow_credentials` sin autenticación | Baja | Resuelto (parcial) |
 | P-14 | `/health/ready` nunca refleja fallas reales de dependencias | Baja | Resuelto |
 | P-15 | Inconsistencia camelCase/snake_case entre `rag-services` y `embedding`/`storage` | Baja | Resuelto |
@@ -155,11 +155,14 @@ Cómo usarlo:
 
 ### P-12 — Acoplamiento import-time con Vault en `app/schemas/embedding.py`
 
-- **Estado:** Pendiente
-- **Ubicación:** `app/schemas/embedding.py:9` (`settings = get_settings()` a nivel de módulo).
-- **Descripción:** Importar el módulo de schemas ejecuta `get_settings()`, que internamente llama a Vault. Si Vault no está accesible, ni siquiera se puede importar el módulo.
-- **Impacto:** Rompe testabilidad unitaria aislada (no se puede importar schemas sin Vault configurado) y acopla una capa de contratos HTTP a infraestructura de secretos.
-- **Acción sugerida:** mover la resolución de defaults (`rag_default_list_limit`, `rag_default_top_k`) a `Field(default_factory=...)` evaluado en tiempo de request, o inyectar el valor por defecho en el controller en vez del schema.
+- **Estado:** Resuelto
+- **Detectado:** 2026-08-10
+- **Resuelto el:** 2026-08-11
+- **Ubicación:** `app/schemas/embedding.py` (`ListDocumentsRequest.limit`, `SearchSimilarDocumentsRequest.top_k`, `RagQueryRequest.top_k`).
+- **Descripción:** El módulo ejecutaba `settings = get_settings()` a nivel de módulo para usar `settings.rag_default_list_limit`/`settings.rag_default_top_k` como default de tres campos. Importar el módulo disparaba resolución completa de `Settings` (y, con `USE_VAULT_CONFIG=true`, una llamada real a Vault) solo por importar un archivo de schemas.
+- **Impacto:** Rompía testabilidad unitaria aislada (no se podía importar schemas sin Vault/Settings resuelto) y acoplaba una capa de contratos HTTP a infraestructura de secretos, sin necesidad real — el valor solo hace falta cuando efectivamente se construye un request.
+- **Solución aplicada:** se eliminó el `settings = get_settings()` a nivel de módulo. Los tres campos ahora usan `Field(default_factory=lambda: get_settings().rag_default_list_limit, ...)` (y equivalente para `top_k`) — la resolución de `Settings` queda diferida a cuando efectivamente se construye una instancia del schema (por request), no al importar el módulo. `get_settings()` sigue siendo `@lru_cache`, así que el costo real de resolución solo se paga una vez independientemente de dónde se invoque.
+- **Verificación real:** se importó `app.schemas.embedding` con `get_settings` monkeypercheado para lanzar una excepción si se llama — el import terminó sin errores, confirmando que ya no se invoca en tiempo de import. Luego, con `get_settings` real, se construyeron instancias de los tres schemas y se confirmó que los defaults siguen resolviendo correctamente (`limit=100`, `top_k=5`) y que un valor explícito en el request sigue pisando el default (`limit=7`).
 
 ### P-13 — CORS abierto (`*`) + `allow_credentials` sin autenticación
 
