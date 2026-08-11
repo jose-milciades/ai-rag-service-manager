@@ -59,7 +59,7 @@ class ConfigServerClient:
                 "property_sources": len(property_sources),
                 "resolved_keys": sorted(resolved.keys()),
             }
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - integracion opcional de arranque: cualquier falla se reporta y no debe impedir el startup
             logger.warning("spring config could not be loaded from %s: %s", url, exc)
             return {
                 "enabled": True,

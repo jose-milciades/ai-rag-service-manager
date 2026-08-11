@@ -1,3 +1,5 @@
+from typing import Unpack
+
 from pydantic import ConfigDict
 
 
@@ -6,7 +8,7 @@ def to_camel(value: str) -> str:
     return chunks[0] + "".join(chunk.title() for chunk in chunks[1:])
 
 
-def get_camel_case_config(**extra_kwargs: object) -> ConfigDict:
+def get_camel_case_config(**extra_kwargs: Unpack[ConfigDict]) -> ConfigDict:
     return ConfigDict(
         alias_generator=to_camel,
         populate_by_name=True,

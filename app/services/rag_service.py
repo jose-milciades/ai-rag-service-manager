@@ -10,7 +10,7 @@ Su responsabilidad es orquestar reglas de negocio sobre la entidad
 """
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi import HTTPException, status
@@ -74,14 +74,14 @@ class RagServiceManager:
             base_url=payload.base_url,
             status=payload.status,
             metadata=payload.metadata,
-            updated_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(UTC),
         )
         return await self._repository.save(updated)
 
     async def update_status(self, service_id: str, status_value: RagServiceStatus) -> RagService:
         """Actualiza solo el estado del servicio."""
         current = await self.get_service(service_id)
-        updated = replace(current, status=status_value, updated_at=datetime.now(timezone.utc))
+        updated = replace(current, status=status_value, updated_at=datetime.now(UTC))
         return await self._repository.save(updated)
 
     async def delete_service(self, service_id: str) -> None:

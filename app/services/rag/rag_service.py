@@ -46,7 +46,9 @@ class RAGService:
         self.embedding_model = embedding_model or settings.rag_embedding_model
         self._vector_size = 128
         if not self._vector_store.collection_exists(self.collection_name):
-            self._vector_store.create_collection(self.collection_name, vector_size=self._vector_size)
+            self._vector_store.create_collection(
+                self.collection_name, vector_size=self._vector_size
+            )
 
     def index_documents(
         self,
@@ -63,10 +65,14 @@ class RAGService:
             chunks = self._split_text(document) if chunk else [document]
             for chunk_index, current_chunk in enumerate(chunks):
                 texts_to_index.append(current_chunk)
-                metadata_to_index.append({**meta, "chunk_index": chunk_index, "text": current_chunk})
+                metadata_to_index.append(
+                    {**meta, "chunk_index": chunk_index, "text": current_chunk}
+                )
 
         vectors = [self._embed_text(text) for text in texts_to_index]
-        self._vector_store.insert_vectors(self.collection_name, vectors=vectors, payloads=metadata_to_index)
+        self._vector_store.insert_vectors(
+            self.collection_name, vectors=vectors, payloads=metadata_to_index
+        )
         return len(texts_to_index)
 
     def search(

@@ -1,6 +1,5 @@
 from functools import lru_cache
 
-
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -19,8 +18,12 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("EUREKA_APP_NAME"),
     )
     app_env: str = Field(default="development", validation_alias=AliasChoices("APP_ENV"))
+    # Excepcion Bandit B104 aceptada (ver pendientes.md P-18): el servicio
+    # corre dentro de un contenedor Docker y debe aceptar conexiones desde
+    # fuera de su namespace de red; 0.0.0.0 es el bind correcto en ese caso,
+    # no una exposicion accidental.
     app_host: str = Field(
-        default="0.0.0.0",
+        default="0.0.0.0",  # nosec B104
         validation_alias=AliasChoices("APP_HOST", "API_HOST"),
     )
     app_port: int = Field(
@@ -34,6 +37,14 @@ class Settings(BaseSettings):
     api_prefix: str = Field(
         default="/api/v1",
         validation_alias=AliasChoices("APP_API_PREFIX", "API_DEV_V1_CHAT_AGENT"),
+    )
+    cors_allowed_origins: str = Field(
+        default="*",
+        validation_alias=AliasChoices("CORS_ALLOWED_ORIGINS"),
+    )
+    readiness_critical_dependencies: str = Field(
+        default="config_server,eureka",
+        validation_alias=AliasChoices("READINESS_CRITICAL_DEPENDENCIES"),
     )
 
     spring_profiles_active: str = Field(
@@ -89,6 +100,10 @@ class Settings(BaseSettings):
     storage_default_bucket_name: str | None = Field(
         default=None,
         validation_alias=AliasChoices("STORAGE_DEFAULT_BUCKET_NAME"),
+    )
+    storage_public_bucket_name: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("STORAGE_PUBLIC_BUCKET_NAME"),
     )
     storage_chunk_upload_temp_dir: str = Field(
         default=".runtime/uploads",

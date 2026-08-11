@@ -1,11 +1,14 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
+from app.core.schema import get_camel_case_config
 from app.domain.entities.rag_service import RagServiceStatus
 
 
 class RagServiceBase(BaseModel):
+    model_config = get_camel_case_config()
+
     name: str = Field(min_length=3, max_length=100)
     description: str | None = Field(default=None, max_length=300)
     llm_provider: str = Field(min_length=2, max_length=50)
@@ -25,11 +28,13 @@ class RagServiceUpdate(RagServiceBase):
 
 
 class RagServiceStatusUpdate(BaseModel):
+    model_config = get_camel_case_config()
+
     status: RagServiceStatus
 
 
 class RagServiceResponse(RagServiceBase):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = get_camel_case_config(from_attributes=True)
 
     service_id: str
     status: RagServiceStatus
@@ -38,5 +43,7 @@ class RagServiceResponse(RagServiceBase):
 
 
 class RagServiceListResponse(BaseModel):
+    model_config = get_camel_case_config()
+
     items: list[RagServiceResponse]
     total: int

@@ -367,6 +367,264 @@ Recomendaciones para mantener el análisis limpio:
 - agrega nuevas exclusiones solo si un archivo técnico termina dentro de `app/` o si en el futuro cambias `sonar.sources`;
 - si agregas pruebas en `tests/`, puedes declarar `sonar.tests=tests` y reportar cobertura desde `pytest`.
 
+## Estándar de calidad, seguridad y arquitectura
+
+Resumen operativo del estándar corporativo mínimo que este proyecto sigue como referencia para microservicios Python. Originalmente vivía como archivo aparte (`ESTANDAR_MICROSERVICIO_PYTHON.md`); se migró aquí para no mantener dos documentos, y el archivo se eliminó del repo. Los números de sección (`§N`) se conservan tal cual porque `pendientes.md` los usa para trazabilidad de cumplimiento — no renumerar si se edita esta sección.
+
+**Objetivo:** calidad y mantenibilidad del código, seguridad de la aplicación y de la API, trazabilidad y observabilidad, pruebas automatizadas, control de vulnerabilidades, consistencia arquitectónica, seguridad de imágenes Docker, integración con CI/CD.
+
+**Alcance:** aplica a microservicios Python, típicamente con FastAPI, Pydantic, SQLAlchemy, PostgreSQL, Redis, Docker, Keycloak/OAuth2/OIDC. Las herramientas concretas pueden cambiar; los controles de calidad y seguridad deben mantenerse. *(En `ai-rag-service-manager` no hay hoy DB relacional, Redis ni auth federada — ver "Alcance actual" más arriba; esas partes del estándar no aplican mientras eso no cambie.)*
+
+### §3 — Estándar tecnológico mínimo
+
+| Categoría | Estándar / herramienta | Requisito |
+|---|---|---|
+| Lenguaje | Python 3.12+ | Obligatorio |
+| Framework API | FastAPI | Cuando corresponda |
+| Validación | Pydantic | Obligatorio para contratos API |
+| Lint / formato | Ruff | Obligatorio |
+| Tipado | mypy | Obligatorio |
+| Tests | pytest | Obligatorio |
+| Cobertura | pytest-cov | Obligatorio |
+| Calidad | SonarQube | Obligatorio |
+| Seguridad Python | Bandit | Obligatorio |
+| Dependencias | pip-audit | Obligatorio |
+| Secretos | Gitleaks | Obligatorio |
+| Container security | Trivy | Obligatorio |
+| API | OpenAPI | Obligatorio |
+| Observabilidad | OpenTelemetry | Recomendado / obligatorio en producción |
+| Autenticación | OAuth2/OIDC / Keycloak | Según arquitectura |
+| Contenedores | Docker | Según despliegue |
+
+### §4-5 — Calidad de código y tipado estático
+
+- `ruff format --check .` y `ruff check .` deben pasar con 0 errores; excepciones justificadas y documentadas (`# noqa`/`# nosec` con motivo, no a secas).
+- `mypy` con `disallow_untyped_defs`, `check_untyped_defs`, `no_implicit_optional`, `warn_unused_ignores`, `warn_redundant_casts` en 0 errores. Toda función nueva debe llevar anotaciones de tipo.
+
+### §6 — Arquitectura del microservicio
+
+Separación mínima: `HTTP/API → Application/Services → Domain → Repositories → Infrastructure`. Ningún endpoint debe concentrar validación, lógica de negocio, acceso a datos, llamadas a otros servicios, manejo de errores y construcción de la respuesta completa a la vez — eso vive en el router delegando a un service/use case, que delega a un repository.
+
+### §7 — API REST
+
+Contrato documentado vía OpenAPI: endpoints, métodos, parámetros, headers, request/response body, códigos HTTP, errores, autenticación, ejemplos. Cambios incompatibles requieren nueva versión (`/api/v1` → `/api/v2`), no romper el contrato existente.
+
+### §8 — Validación de datos
+
+Toda entrada (HTTP, query/path params, headers, body, respuestas de servicios externos) se valida con Pydantic/FastAPI. Nunca confiar directamente en datos del cliente.
+
+### §9 — Manejo de errores
+
+Prohibido `except Exception: pass` o solo `print(e)`. Usar excepciones específicas y handlers globales cuando corresponda. Mapeo esperado: `NotFoundException→404`, `ValidationError→400/422`, `Unauthorized→401`, `Forbidden→403`, `Conflict→409`, error inesperado→500. Los errores internos no deben exponer stack traces, contraseñas, tokens, credenciales ni detalles de infraestructura.
+
+### §10 — Seguridad (OWASP)
+
+Considerar como mínimo OWASP Top 10 y OWASP API Security Top 10, con atención especial a: Broken Object/Function Level Authorization, Broken Authentication, Unrestricted Resource Consumption, SSRF, Security Misconfiguration, Improper Inventory Management, Unsafe Consumption of APIs.
+
+### §11 — Autenticación y autorización
+
+Cuando se usa Keycloak/OIDC: validar firma del token, issuer, audience, expiración, roles, scopes y permisos. No confundir autenticación (`401` = no autenticado/token inválido) con autorización (`403` = autenticado sin permisos).
+
+### §12 — Gestión de secretos
+
+Prohibido hardcodear passwords, API keys, client secrets, JWT secrets, tokens, private keys o connection strings con credenciales en el código fuente. Usar Vault, Secret Manager, Kubernetes Secrets o variables protegidas de CI/CD.
+
+### §13 — Bandit
+
+`bandit -r app/` — objetivo mínimo `High: 0`. Hallazgos Medium deben revisarse y, si se aceptan, documentarse.
+
+### §14 — Dependencias
+
+Dependencias de producción controladas y versionadas, sin depender de versiones flotantes sin límite. Usar un mecanismo de lock cuando la herramienta lo soporte.
+
+### §15 — Auditoría de dependencias
+
+`pip-audit` — objetivo: 0 vulnerabilidades conocidas críticas/altas explotables. Excepciones justificadas y con seguimiento. Se recomienda Dependabot/Renovate para mantener dependencias actualizadas.
+
+### §16 — Detección de secretos (Gitleaks)
+
+`gitleaks detect` sobre el repositorio (incluyendo historial) y en el pipeline de CI/CD — objetivo: 0 secretos detectados.
+
+### §17 — SonarQube
+
+Quality Gate mínimo: `Blocker Issues=0`, `Critical Bugs=0`, `Critical Vulnerabilities=0`, `Security Hotspots=100% revisados`, `Code Coverage>=80%`, `Duplicación<3%` (recomendado), `Quality Gate=PASS`. El pipeline no debe permitir promoción si el Quality Gate falla.
+
+### §18 — Pruebas automatizadas
+
+Unitarias, integración, API, validaciones, manejo de errores y casos límite. `pytest --cov=app --cov-report=term-missing` — objetivo `Coverage >= 80%`. La cobertura por sí sola no garantiza calidad: deben probarse escenarios funcionalmente relevantes.
+
+### §19 — HTTP Status Codes
+
+Mínimo: `200, 201, 204, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503`, usados correctamente. Nunca `200 OK` para representar un error funcional.
+
+### §20-21 — Timeouts y Retries
+
+Toda llamada a servicios externos debe tener timeout explícito (nunca una llamada bloqueante sin límite). Retries solo cuando tenga sentido, con backoff exponencial y, si aplica, circuit breaker; nunca reintentar automáticamente una operación no idempotente sin analizar el riesgo de duplicación.
+
+### §22 — Logging
+
+Nunca `print()` como logging de producción; usar `logging` con logs estructurados, trazables y consistentes entre microservicios. Nunca loguear passwords, tokens, headers de autorización, API keys, client secrets, private keys, ni información personal innecesaria.
+
+### §23 — Correlation ID
+
+Cada petición debe poder relacionarse entre microservicios mediante un identificador de correlación/traza (ej. `X-Correlation-ID`) propagado de extremo a extremo.
+
+### §24 — Health Checks
+
+Mínimo `GET /health`; preferible `GET /health/live` (liveness: el proceso está vivo) y `GET /health/ready` (readiness: el servicio puede recibir tráfico, validando dependencias críticas).
+
+### §25 — OpenTelemetry
+
+Para producción: instrumentar traces, metrics, logs y correlation/trace IDs, de forma que una petición se pueda visualizar de extremo a extremo entre servicios.
+
+### §26 — Docker
+
+Imágenes base oficiales, preferir `slim`, sin herramientas innecesarias, sin secretos en la imagen, sin correr como root, con `.dockerignore`, imagen actualizada.
+
+### §27 — Trivy
+
+`trivy image <imagen>` antes de desplegar — objetivo `CRITICAL: 0`, `HIGH: 0`. Excepciones justificadas y documentadas.
+
+### §28 — Variables de entorno
+
+Configuración separada del código (`DATABASE_HOST`, `REDIS_HOST`, `KEYCLOAK_URL`, `LOG_LEVEL`, etc.), sin valores sensibles en el repositorio. Separar código / configuración / secretos.
+
+### §29-30 — Base de datos y Redis
+
+Acceso a BD mediante una capa definida (`Service → Repository → SQLAlchemy → PostgreSQL`), sin SQL directo en routers, con migraciones versionadas (Alembic/Liquibase u otra herramienta institucional). Redis: definir TTL, evitar datos sensibles innecesarios, controlar tamaño de claves/valores, timeout y comportamiento ante indisponibilidad. *(No aplica hoy a este proyecto: sin DB relacional ni Redis — ver "Alcance actual".)*
+
+### §31-32 — CI/CD
+
+Pipeline mínimo: `checkout → deps → Ruff → mypy → pytest+coverage → Bandit → pip-audit → Gitleaks → SonarQube → Docker build → Trivy → Quality Gates → Deploy`. El despliegue debe bloquearse si falla un control crítico.
+
+### §33 — Checklist mínimo antes de producción
+
+**Código:** Ruff sin errores · formateado · mypy sin errores · sin `print()` de producción · sin TODO críticos · sin código muerto · sin excepciones silenciosas · sin credenciales en código.
+
+**Tests:** unit tests · integration tests cuando corresponda · API tests · coverage ≥ 80% · casos de error probados.
+
+**Seguridad:** OWASP Top 10 y API Top 10 revisados · Bandit ejecutado · pip-audit ejecutado · Gitleaks ejecutado · SonarQube Quality Gate aprobado · autenticación y autorización validadas · secrets fuera del código.
+
+**Docker:** imagen actualizada · usuario no-root · `.dockerignore` · sin secretos en la imagen · Trivy ejecutado con Critical=0 y High=0.
+
+**API:** OpenAPI actualizado · códigos HTTP correctos · validaciones implementadas · errores estandarizados · versionamiento definido · timeouts configurados.
+
+**Operación:** `/health` implementado · liveness · readiness · logging estructurado · Correlation ID · métricas · trazabilidad · OpenTelemetry cuando corresponda.
+
+### §34 — Quality Gate corporativo recomendado
+
+Un microservicio **no debe pasar a producción** si no cumple:
+
+```text
+SonarQube Quality Gate        = PASS
+Ruff                          = PASS
+mypy                          = PASS
+pytest                        = PASS
+Coverage                      >= 80%
+Bandit High                   = 0
+Dependencias vulnerables      = 0 críticas/altas
+Gitleaks                      = 0 secretos
+Trivy Critical                = 0
+Trivy High                    = 0
+Documentación OpenAPI         = OK
+Health checks                 = OK
+Autenticación/autorización    = OK
+Secrets fuera del código      = OK
+```
+
+### §35 — Excepciones
+
+Cuando un microservicio no pueda cumplir temporalmente un requisito: la excepción debe quedar documentada, indicar el motivo, identificar el riesgo, definir una fecha o condición de corrección, y contar con aprobación del responsable técnico cuando corresponda. No usar excepciones permanentes para ignorar los controles. Este proyecto sigue este proceso en [`pendientes.md`](./pendientes.md): cada `P-XX` es una excepción o brecha trazada con esa misma estructura (motivo, riesgo, estado, resolución).
+
+### §36 — Resultado esperado
+
+Un microservicio se considera apto para producción cuando demuestra, con código y CI/CD, sus tres pilares — **Calidad** (Ruff, mypy, pytest, SonarQube), **Seguridad** (OWASP, Bandit, pip-audit, Gitleaks, Trivy) y **Operabilidad** (Logging, Metrics, Health, Tracing) — y el pipeline obtiene todos los Quality Gates requeridos.
+
+## Calidad y seguridad
+
+El detalle de qué tanto cumple hoy `ai-rag-service-manager` con el estándar de arriba, sección por sección y con evidencia real de cada herramienta, vive en [`pendientes.md`](./pendientes.md) (`P-18`) — esta sección solo documenta **qué está instalado y cómo correrlo**.
+
+### Instalar las herramientas de desarrollo
+
+Todas las herramientas de calidad/seguridad son dependencias `dev` declaradas en `pyproject.toml`:
+
+```bash
+uv sync --extra dev
+```
+
+Con `venv` tradicional: `pip install -e .[dev]`.
+
+### Ruff (lint + formato)
+
+```bash
+uv run ruff check .          # lint
+uv run ruff format --check . # verifica formato sin modificar archivos
+uv run ruff format .         # aplica formato
+```
+
+Config en `[tool.ruff]` (`pyproject.toml`). Los `.md` de la raíz quedan excluidos: Ruff ≥ 0.16 también formatea bloques de código Python embebidos en Markdown, y no queremos que toque este mismo README u otra documentación. `File(...)`/`Form(...)`/`Query(...)` como default de parámetro (patrón estándar de inyección de dependencias de FastAPI) está explícitamente permitido vía `[tool.ruff.lint.flake8-bugbear].extend-immutable-calls`.
+
+### mypy (tipado estático)
+
+```bash
+uv run mypy
+```
+
+Config en `[tool.mypy]`. Dos notas relevantes si tocas esa sección:
+
+- `python_version` sigue `requires-python` y el Dockerfile (hoy `3.11`), no la versión del intérprete local del `venv`.
+- `explicit_package_bases = true` es necesario porque la mayoría de los paquetes bajo `app/` no tiene `__init__.py` (namespace packages implícitos) y hay varios módulos que comparten nombre de archivo en carpetas distintas.
+
+### Bandit (seguridad estática)
+
+```bash
+uv run bandit -r app/
+```
+
+Excepciones aceptadas se documentan inline con `# nosec <regla>` y su justificación en un comentario aparte (no se usa `# nosec` a secas).
+
+### pip-audit (vulnerabilidades de dependencias)
+
+```bash
+uv run pip-audit
+```
+
+Corre contra las versiones realmente resueltas en `uv.lock`. Si aparece algo nuevo, primero probar `uv lock --upgrade` (respeta los rangos ya declarados en `pyproject.toml`) antes de subir el límite superior de una dependencia.
+
+### pytest + cobertura
+
+```bash
+uv run pytest --cov=app --cov-report=term-missing
+```
+
+Hoy no hay tests (`tests/` no existe, ver `pendientes.md` P-07): el comando corre pero reporta "no tests collected". El pipeline de CI lo ejecuta con `continue-on-error` hasta que exista una suite real.
+
+### Gitleaks y Trivy (sin instalación local)
+
+No son paquetes Python; se corren vía sus imágenes Docker oficiales, sin instalar nada en el host:
+
+```bash
+# Secretos en el historial de git
+docker run --rm -v "$PWD":/repo -w /repo zricethezav/gitleaks:latest detect --source /repo -v
+
+# Vulnerabilidades en la imagen ya construida
+docker build -t ai-rag-service-manager:local .
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest \
+  image --severity CRITICAL,HIGH ai-rag-service-manager:local
+```
+
+También están declarados como jobs del pipeline de CI (`.github/workflows/ci.yml`), usando las actions oficiales `gitleaks/gitleaks-action` y `aquasecurity/trivy-action`.
+
+### CI/CD
+
+Pipeline mínimo en [`.github/workflows/ci.yml`](./.github/workflows/ci.yml): Ruff, mypy, Bandit, pip-audit, pytest (no bloqueante hasta que exista una suite real), build de Docker + Trivy, y Gitleaks. El job de SonarQube existe pero está deshabilitado (`if: false`) hasta confirmar que el runner tiene red hacia el `sonar.host.url` interno definido en `sonar-project.properties`.
+
+### Otros controles del estándar ya cubiertos en el código
+
+- **Usuario no-root en Docker** y `.dockerignore`: ver sección Docker más abajo.
+- **Correlation ID**: `CorrelationIdMiddleware` (`app/core/middleware.py`) lee `X-Correlation-ID` del request entrante (o genera uno) y lo devuelve en la respuesta; `CorrelationIdFilter` (`app/core/logging.py`) lo inyecta en cada línea de log de esa request.
+- **Excepciones documentadas**: excepciones genéricas (`except Exception`) en fronteras de integración externa (Spring Config, Eureka, GCS) llevan `# noqa: BLE001` con la razón inline, en vez de silenciarse.
+
 ## Endpoints principales
 
 - `GET /`
@@ -384,8 +642,19 @@ Recomendaciones para mantener el análisis limpio:
 - `POST /api/v1/embedding/get_embeddings_by_unique_code`
 - `POST /api/v1/embedding/search_similar_documents`
 - `POST /api/v1/embedding/rag_query`
+- `POST /api/v1/storage/upload`
+- `POST /api/v1/storage/chunk`
+- `GET /api/v1/storage/get`
+- `GET /api/v1/storage/getFileByte`
+- `POST /api/v1/storage/public-upload`
+
+Contrato completo de request/response de cada endpoint (incluyendo `storage`, que replica la superficie pública de un microservicio Java de storage): ver [`api.md`](./api.md).
+
+Brechas conocidas, deuda técnica y su trazabilidad de resolución: ver [`pendientes.md`](./pendientes.md).
 
 ## Docker
+
+La imagen corre como usuario no-root (`appuser`, uid 1000) y aplica `apt-get upgrade` en el build para tomar parches de seguridad del SO disponibles al momento de construir (ver §26/§27 arriba y `pendientes.md` P-18 para el detalle de vulnerabilidades de imagen aún pendientes de resolver). El build usa `.dockerignore` para no copiar `.venv`, `.git`, secretos locales ni documentación interna al contexto.
 
 ```bash
 docker build -t ai-rag-service-manager .

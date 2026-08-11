@@ -51,7 +51,9 @@ class RAGAgent:
     ) -> str:
         """Recupera contexto relevante con un filtro opcional de departamento."""
         filter_conditions = {"department": department} if department else None
-        return self.rag_service.retrieve_context(query=query, top_k=top_k, filter_conditions=filter_conditions)
+        return self.rag_service.retrieve_context(
+            query=query, top_k=top_k, filter_conditions=filter_conditions
+        )
 
     def answer_with_context(
         self,

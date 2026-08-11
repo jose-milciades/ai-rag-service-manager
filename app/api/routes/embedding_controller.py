@@ -72,7 +72,7 @@ async def save_document_vecstore(
         )
         return SaveDocumentVecstoreResponse(**result)
     except Exception as exc:
-        logger.exception("error saving document to vecstore", exc_info=True)
+        logger.exception("error saving document to vecstore")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error saving document: {exc}",
@@ -101,7 +101,7 @@ async def delete_index_vecstore(
             codigo=200,
         )
     except Exception as exc:
-        logger.exception("error deleting index", exc_info=True)
+        logger.exception("error deleting index")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting index: {exc}",
@@ -126,7 +126,7 @@ async def list_documents(
         )
         return ListDocumentsResponse(**result)
     except Exception as exc:
-        logger.exception("error listing documents", exc_info=True)
+        logger.exception("error listing documents")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error listing documents: {exc}",
@@ -150,7 +150,7 @@ async def get_embeddings_by_unique_code(
         )
         return GetEmbeddingsByUniqueCodeResponse(**result)
     except Exception as exc:
-        logger.exception("error getting embeddings", exc_info=True)
+        logger.exception("error getting embeddings")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error getting embeddings: {exc}",
@@ -176,7 +176,7 @@ async def search_similar_documents(
         )
         return SearchSimilarDocumentsResponse(**result)
     except Exception as exc:
-        logger.exception("error searching documents", exc_info=True)
+        logger.exception("error searching documents")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error searching documents: {exc}",
@@ -205,7 +205,7 @@ async def rag_query(
         )
         return RagQueryResponse(**result)
     except Exception as exc:
-        logger.exception("error executing rag query", exc_info=True)
+        logger.exception("error executing rag query")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error executing rag query: {exc}",

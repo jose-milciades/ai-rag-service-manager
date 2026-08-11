@@ -105,7 +105,9 @@ class InMemoryVectorStore(VectorStoreInterface):
         filter_conditions: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Busca por similitud coseno sobre los registros disponibles."""
-        records = self.list_records(collection_name, limit=10_000, filter_conditions=filter_conditions)
+        records = self.list_records(
+            collection_name, limit=10_000, filter_conditions=filter_conditions
+        )
         scored = []
         for record in records:
             score = self._cosine_similarity(query_vector, record["vector"])
@@ -125,7 +127,9 @@ class InMemoryVectorStore(VectorStoreInterface):
             records = [
                 record
                 for record in records
-                if all(record["payload"].get(key) == value for key, value in filter_conditions.items())
+                if all(
+                    record["payload"].get(key) == value for key, value in filter_conditions.items()
+                )
             ]
         return records[:limit]
 
@@ -158,7 +162,9 @@ class VectorStoreManager:
 
     def __init__(self, settings: Settings) -> None:
         requested_backend = settings.vector_db_type.lower().strip()
-        self.backend_name = requested_backend if requested_backend in {"memory", "milvus"} else "memory"
+        self.backend_name = (
+            requested_backend if requested_backend in {"memory", "milvus"} else "memory"
+        )
         if self.backend_name != "memory":
             logger.warning(
                 "vector backend '%s' requested but this scaffold uses the in-memory adapter until a concrete integration is added",

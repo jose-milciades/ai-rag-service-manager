@@ -82,7 +82,9 @@ class DocumentEmbeddingService:
         metadata.update(self._normalize_parameters(list_parameters or []))
 
         rag_service = self._get_rag_service(index_name)
-        chunks_created = rag_service.index_documents(documents=[text_content], metadata=[metadata], chunk=True)
+        chunks_created = rag_service.index_documents(
+            documents=[text_content], metadata=[metadata], chunk=True
+        )
 
         return {
             "success": True,
@@ -109,12 +111,16 @@ class DocumentEmbeddingService:
         metadata_filter: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Lista documentos agrupando chunks por documento logico."""
-        records = self._vector_store_manager.list_records(index_name, limit=limit * 10, filter_conditions=metadata_filter)
+        records = self._vector_store_manager.list_records(
+            index_name, limit=limit * 10, filter_conditions=metadata_filter
+        )
 
         documents: dict[str, dict[str, Any]] = {}
         for record in records:
             payload = record["payload"]
-            document_key = str(payload.get("unique_code") or payload.get("id_document") or record["id"])
+            document_key = str(
+                payload.get("unique_code") or payload.get("id_document") or record["id"]
+            )
             if document_key in documents:
                 continue
             documents[document_key] = {
@@ -148,7 +154,9 @@ class DocumentEmbeddingService:
                 "score": 1.0,
                 "text": record["payload"].get("text", ""),
                 "chunk_index": record["payload"].get("chunk_index", 0),
-                "metadata": {key: value for key, value in record["payload"].items() if key != "text"},
+                "metadata": {
+                    key: value for key, value in record["payload"].items() if key != "text"
+                },
             }
             for record in records
         ]
@@ -178,7 +186,9 @@ class DocumentEmbeddingService:
             {
                 "id": result["id"],
                 "score": result["score"],
-                "metadata": {key: value for key, value in result["payload"].items() if key != "text"},
+                "metadata": {
+                    key: value for key, value in result["payload"].items() if key != "text"
+                },
                 "text_preview": result["payload"].get("text", "")[:200],
             }
             for result in results

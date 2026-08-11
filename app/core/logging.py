@@ -1,8 +1,21 @@
 import logging
 import os
+from contextvars import ContextVar
 from logging.config import dictConfig
 
 from app.core.config import get_settings
+
+# Correlation id activo para la request en curso (ver CorrelationIdMiddleware
+# en app.main). "-" fuera de una request (p.ej. logs de startup/shutdown).
+correlation_id_var: ContextVar[str] = ContextVar("correlation_id", default="-")
+
+
+class CorrelationIdFilter(logging.Filter):
+    """Inyecta el correlation id activo en cada log record."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.correlation_id = correlation_id_var.get()
+        return True
 
 
 def configure_logging() -> None:
@@ -12,10 +25,15 @@ def configure_logging() -> None:
         {
             "version": 1,
             "disable_existing_loggers": False,
+            "filters": {
+                "correlation_id": {
+                    "()": CorrelationIdFilter,
+                },
+            },
             "formatters": {
                 "default": {
                     "()": "colorlog.ColoredFormatter",
-                    "format": "%(log_color)s%(asctime)s | %(name)-25s | %(levelname)-8s | %(message)s",
+                    "format": "%(log_color)s%(asctime)s | %(name)-25s | %(levelname)-8s | [%(correlation_id)s] | %(message)s",
                     "log_colors": {
                         "DEBUG": "cyan",
                         "INFO": "green",
@@ -25,18 +43,20 @@ def configure_logging() -> None:
                     },
                 },
                 "file": {
-                    "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+                    "format": "%(asctime)s [%(levelname)s] %(name)s [%(correlation_id)s]: %(message)s",
                 },
             },
             "handlers": {
                 "console": {
                     "class": "logging.StreamHandler",
                     "formatter": "default",
+                    "filters": ["correlation_id"],
                     "level": settings.app_log_level.upper(),
                 },
                 "file": {
                     "class": "logging.handlers.RotatingFileHandler",
                     "formatter": "file",
+                    "filters": ["correlation_id"],
                     "filename": "logs/app.log",
                     "maxBytes": 5 * 1024 * 1024,
                     "backupCount": 5,

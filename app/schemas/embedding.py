@@ -5,7 +5,6 @@ from pydantic import BaseModel, Field
 from app.core.config import get_settings
 from app.core.schema import get_camel_case_config
 
-
 INDEX_VECSTORE_DESCRIPTION = "Nombre del índice/colección"
 settings = get_settings()
 
@@ -21,7 +20,9 @@ class SaveDocumentVecstoreRequest(BaseModel):
     has_document_base64: bool = Field(True, description="Si el documento viene en base64")
     url_download_file: str | None = Field(default=None, description="URL para descargar el archivo")
     bucket: str | None = Field(default=None, description="Bucket de almacenamiento")
-    list_parameters: list[dict[str, Any]] = Field(default_factory=list, description="Metadata adicional")
+    list_parameters: list[dict[str, Any]] = Field(
+        default_factory=list, description="Metadata adicional"
+    )
 
 
 class DeleteIndexVecstoreRequest(BaseModel):

@@ -27,7 +27,11 @@ dependencies = [
 dev = [
   "pytest>=8.3.0,<9.0.0",
   "pytest-asyncio>=0.24.0,<1.0.0",
-  "ruff>=0.8.0,<1.0.0"
+  "pytest-cov>=6.0.0,<7.0.0",
+  "ruff>=0.8.0,<1.0.0",
+  "mypy>=1.13.0,<2.0.0",
+  "bandit>=1.7.10,<2.0.0",
+  "pip-audit>=2.7.3,<3.0.0"
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -36,10 +40,51 @@ packages = ["app"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Ruff >= 0.16 tambien formatea bloques de codigo Python embebidos en
+# Markdown por defecto. Se excluyen los .md de la raiz para no tocar
+# documentacion (README.md, api.md, pendientes.md).
+extend-exclude = ["*.md"]
+
+# File(...)/Form(...)/Query(...) como default de parametro es el patron
+# esperado de FastAPI para inyeccion de dependencias, no una llamada costosa
+# reevaluada por accidente (que es lo que B008 intenta prevenir).
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+  "fastapi.Depends",
+  "fastapi.File",
+  "fastapi.Form",
+  "fastapi.Query",
+  "fastapi.Body",
+  "fastapi.Header",
+  "fastapi.Cookie",
+  "fastapi.Path",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.mypy]
+# python_version sigue requires-python (3.11) y el Dockerfile, no la version
+# local del venv de desarrollo. Ver pendientes.md P-18 para el upgrade a 3.12.
+python_version = "3.11"
+files = ["app"]
+# Sin esto, mypy colisiona: la mayoria de los paquetes bajo app/ no tienen
+# __init__.py (namespace packages implicitos) y hay varios modulos que
+# comparten nombre de archivo en carpetas distintas (p.ej. rag_service.py en
+# domain/entities, schemas, services y services/rag).
+explicit_package_bases = true
+check_untyped_defs = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+# Dependencias de terceros sin stubs propios ni marcador py.typed: se ignoran
+# solo los imports faltantes, no se relaja ninguna otra regla.
+[[tool.mypy.overrides]]
+module = ["hvac.*", "py_eureka_client.*", "google.cloud.*", "google.oauth2.*"]
+ignore_missing_imports = true
 
 [tool.fastapi]
 entrypoint = "app.main:app"

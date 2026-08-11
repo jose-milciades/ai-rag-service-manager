@@ -1,8 +1,8 @@
 import os
+from functools import lru_cache
+
 import hvac
 import urllib3
-
-from functools import lru_cache
 from urllib3.exceptions import InsecureRequestWarning
 
 
@@ -16,7 +16,7 @@ def _configure_tls_warning_suppression(vault_skip_verify: bool) -> None:
 
 
 class VaultClient:
-    def __init__(self):
+    def __init__(self) -> None:
         vault_addr = os.getenv("VAULT_ADDR")
         vault_token = os.getenv("VAULT_TOKEN")
         vault_cacert = os.getenv("VAULT_CACERT")
@@ -75,5 +75,5 @@ class VaultClient:
 
 
 @lru_cache
-def get_vault_client():
+def get_vault_client() -> VaultClient:
     return VaultClient()

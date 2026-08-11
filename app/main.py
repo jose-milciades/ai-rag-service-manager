@@ -1,19 +1,21 @@
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.router_controller import api_router
 from app.api.dependencies.services import get_storage_client
+from app.api.router_controller import api_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
+from app.core.middleware import CorrelationIdMiddleware
 from app.infrastructure.clients.config_server import ConfigServerClient
 from app.infrastructure.clients.eureka import EurekaRegistrar
 
 
 @asynccontextmanager
-async def lifespan(application: FastAPI):
+async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     """Application startup and shutdown orchestration.
 
     En startup se inicializan integraciones operacionales. ``ConfigServerClient``
@@ -50,13 +52,27 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    cors_origins = [
+        origin.strip() for origin in settings.cors_allowed_origins.split(",") if origin.strip()
+    ]
+    allow_all_origins = not cors_origins or cors_origins == ["*"]
+    # Wildcard + credenciales es una combinacion insegura (y de hecho no
+    # funcional para requests con credenciales en un browser real): si no se
+    # configuran origenes explicitos via CORS_ALLOWED_ORIGINS, se sirve el
+    # comportamiento abierto por defecto pero sin credenciales.
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
+        allow_origins=["*"] if allow_all_origins else cors_origins,
+        allow_credentials=not allow_all_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # Se agrega despues del CORS para quedar como capa mas externa: Starlette
+    # ejecuta los middlewares en orden inverso al que se agregan, asi que
+    # este corre primero en el request (fija el correlation id antes que
+    # cualquier otro middleware/handler pueda loguear) y ultimo en la
+    # respuesta (agrega el header de vuelta).
+    application.add_middleware(CorrelationIdMiddleware)
 
     application.include_router(api_router, prefix=settings.api_prefix)
 

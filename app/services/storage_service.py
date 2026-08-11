@@ -4,6 +4,7 @@ Este modulo replica el comportamiento publico de los endpoints de storage del
 micro Java limitandose a la superficie expuesta por ``StorageController``.
 """
 
+import logging
 from base64 import b64encode
 from pathlib import Path
 
@@ -12,6 +13,8 @@ from fastapi import HTTPException, UploadFile, status
 from app.infrastructure.clients.storage_client import StorageClient
 from app.infrastructure.clients.storage_config import StorageConfig
 from app.schemas.storage import FileResponse, UploadFileResponse, UploadPublicFileResponse
+
+logger = logging.getLogger(__name__)
 
 
 class StorageService:
@@ -43,6 +46,7 @@ class StorageService:
         try:
             file_bytes = await file.read()
         except Exception:
+            logger.exception("failed to read uploaded file %r for storage upload", file.filename)
             return UploadFileResponse(success=False)
 
         success = self._storage_client.upload_bytes(
@@ -152,6 +156,9 @@ class StorageService:
         try:
             file_bytes = await file.read()
         except Exception:
+            logger.exception(
+                "failed to read uploaded file %r for public storage upload", file.filename
+            )
             return UploadPublicFileResponse(success=False, url=None)
 
         success, url = self._storage_client.upload_public_bytes(
