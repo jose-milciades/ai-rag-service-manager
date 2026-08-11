@@ -95,9 +95,13 @@ ai-rag-service-manager/
 │   │   │   ├── eureka.py
 │   │   │   ├── storage_client.py
 │   │   │   └── storage_config.py
+│   │   ├── embeddings/
+│   │   │   └── embedding_provider.py
 │   │   ├── repositories/
 │   │   │   └── in_memory_rag_service_repository.py
 │   │   └── vector_store/
+│   │       ├── milvus_vector_store.py
+│   │       ├── vector_store_interface.py
 │   │       └── vector_store_manager.py
 │   ├── schemas/
 │   │   ├── embedding.py
@@ -144,13 +148,16 @@ ai-rag-service-manager/
 
 - `RagServiceManager`: administra el ciclo de vida de configuraciones RAG.
 - `DocumentEmbeddingService`: indexa documentos, lista resultados y ejecuta búsquedas.
-- `RAGService`: servicio central de chunking, embedding determinista e indexación/retrieval.
+- `RAGService`: servicio central de chunking, embedding real e indexación/retrieval.
 - `RAGAgent`: facade orientado a consultas sobre una colección de conocimiento.
 
 ### Infraestructura
 
 - `InMemoryRagServiceRepository`: persistencia temporal de definiciones RAG.
-- `VectorStoreManager`: facade para el backend vectorial configurado.
+- `EmbeddingProvider`: carga un modelo real de embeddings (`sentence-transformers`, vía `pymilvus.model`) una sola vez y lo comparte entre colecciones — ver `RAG_EMBEDDING_MODEL`/`RAG_EMBEDDING_DEVICE`/`RAG_NORMALIZE_EMBEDDINGS`.
+- `VectorStoreManager`: facade para el backend vectorial configurado (`VECTOR_DB_TYPE`).
+- `InMemoryVectorStore`: adapter en memoria, default para desarrollo local sin dependencias externas.
+- `MilvusVectorStore`: adapter real contra Milvus (`pymilvus.MilvusClient`) cuando `VECTOR_DB_TYPE=milvus` — colección con `id` + `vector` + un campo `payload` JSON que preserva la metadata libre que ya usa el resto de la app.
 - `StorageClient`: descarga archivos desde URL o GCS.
 - `ConfigServerClient`: consulta Spring Config Server solo durante el startup.
 - `EurekaRegistrar`: registra y detiene el servicio en Eureka como parte del ciclo de vida.
@@ -162,10 +169,10 @@ Incluido en esta versión:
 - FastAPI + Uvicorn;
 - configuración con `pydantic-settings`;
 - readiness con estado de Config Server y Eureka;
-- logging centralizado;
+- logging centralizado con Correlation ID;
 - CRUD de `rag-services`;
-- embeddings y retrieval básicos;
-- Docker listo para ejecución local.
+- embeddings reales (`sentence-transformers`, local, vía `pymilvus.model`) e indexación/retrieval semántico contra memoria o Milvus (`VECTOR_DB_TYPE=memory|milvus`);
+- Docker listo para ejecución local, con el modelo de embeddings pre-descargado en el build.
 
 Exclusiones intencionales:
 
@@ -174,7 +181,7 @@ Exclusiones intencionales:
 - autenticación JWT/OAuth2;
 - OpenTelemetry;
 - colas como Kafka o RabbitMQ;
-- integración real con Milvus; actualmente el adapter activo es en memoria.
+- generación de respuesta vía LLM en `rag_query` (hoy retorna el contexto recuperado, no una respuesta generada — ver `pendientes.md` P-05).
 
 ## Configuración
 
@@ -193,7 +200,8 @@ Variables relevantes:
 Notas operativas:
 
 - `SPRING_CLOUD_CONFIG_URI` se consulta solo al arrancar la aplicación;
-- `VECTOR_DB_TYPE` hoy debe considerarse preparado para evolución, pero el backend efectivo actual sigue siendo en memoria.
+- `VECTOR_DB_TYPE=milvus` requiere un Milvus real alcanzable en `MILVUS_HOST:MILVUS_PORT`; con `memory` (default) no hace falta nada externo;
+- `RAG_EMBEDDING_MODEL` se descarga/carga una sola vez al arrancar (`EmbeddingProvider`), no por request; cambiarlo implica reconstruir la imagen Docker para no depender de red en el arranque (ver sección Docker).
 
 ## Ejecutar localmente
 
@@ -215,9 +223,23 @@ python -m app.main
 
 ## Configuracion de Vault
 
-El microservicio obtiene su configuracion desde Vault al arrancar. Antes de ejecutar el servicio, define estas variables de entorno:
+Vault es **opcional**, controlado por `USE_VAULT_CONFIG` (mismo patron que `USE_SPRING_CLOUD_CONFIG`/`EUREKA_ENABLED`, ver `pendientes.md` P-17):
+
+- `USE_VAULT_CONFIG=false` o ausente (default): no se intenta Vault. La configuracion sale de variables de entorno ya exportadas y, como fallback, de un archivo `.env` en la raiz del repo (ver `.env.example`). Es el modo pensado para trabajo local sin depender de infraestructura externa.
+- `USE_VAULT_CONFIG=true`: se intenta Vault al arrancar. Si falta `VAULT_ADDR` o `VAULT_TOKEN`, el arranque falla fuerte con un mensaje listando exactamente que falta — no cae en silencio a `.env`.
+
+Para trabajar 100% local sin Vault:
 
 ```bash
+cp .env.example .env
+# dejar USE_VAULT_CONFIG=false (default en .env.example)
+uv run python -m app.main
+```
+
+Para usar Vault, define estas variables de entorno antes de ejecutar el servicio:
+
+```bash
+export USE_VAULT_CONFIG=true
 export VAULT_ADDR=http://localhost:8200
 export VAULT_TOKEN=root-token
 ```
@@ -240,6 +262,7 @@ Cuando este valor esta activo, la aplicacion tambien silencia el `InsecureReques
 Si quieres dejarlas persistentes en tu shell:
 
 ```bash
+echo 'export USE_VAULT_CONFIG=true' >> ~/.bashrc
 echo 'export VAULT_ADDR=http://localhost:8200' >> ~/.bashrc
 echo 'export VAULT_TOKEN=root-token' >> ~/.bashrc
 source ~/.bashrc
@@ -281,6 +304,7 @@ Arranque local por defecto:
 
 ```bash
 chmod +x run-local.sh
+export USE_VAULT_CONFIG=true
 export VAULT_ADDR=http://localhost:8200
 export VAULT_TOKEN=root-token
 ./run-local.sh
@@ -656,9 +680,23 @@ Brechas conocidas, deuda técnica y su trazabilidad de resolución: ver [`pendie
 
 La imagen corre como usuario no-root (`appuser`, uid 1000) y aplica `apt-get upgrade` en el build para tomar parches de seguridad del SO disponibles al momento de construir (ver §26/§27 arriba y `pendientes.md` P-18 para el detalle de vulnerabilidades de imagen aún pendientes de resolver). El build usa `.dockerignore` para no copiar `.venv`, `.git`, secretos locales ni documentación interna al contexto.
 
+El build también pre-descarga el modelo de embeddings por defecto (`sentence-transformers/all-MiniLM-L6-v2`) y fija `HF_HUB_OFFLINE=1` para el runtime, para que el contenedor arranque sin depender de red ni pagar el costo de descarga en el primer request. Si cambias `RAG_EMBEDDING_MODEL` a otro modelo sin reconstruir la imagen, el arranque va a intentar descargarlo igual — falla si no hay salida a internet, porque `HF_HUB_OFFLINE=1` bloquea el fallback online. Esto agrega ~1.6GB al `.venv` (torch CPU-only + sentence-transformers + pymilvus) — ver `pendientes.md` P-19 si el tamaño de imagen es una preocupación.
+
+`appuser` se crea con `--no-create-home`, así que `HOME`, `UV_CACHE_DIR` y `HF_HOME` se fijan explícitamente dentro de `/app` (que sí queda con permisos de escritura para ese usuario); sin esto, `uv run` falla al no poder crear su cache en un `$HOME` inexistente.
+
+Sin Vault (usa `.env`, `USE_VAULT_CONFIG=false` como en el default de `.env.example`):
+
+```bash
+docker build -t ai-rag-service-manager .
+docker run --rm -p 8000:8000 --env-file .env ai-rag-service-manager
+```
+
+Con Vault:
+
 ```bash
 docker build -t ai-rag-service-manager .
 docker run --rm -p 8000:8000 --env-file .env \
+	-e USE_VAULT_CONFIG=true \
 	-e VAULT_ADDR=http://localhost:8200 \
 	-e VAULT_TOKEN=root-token \
 	ai-rag-service-manager
@@ -672,6 +710,7 @@ Con Compose:
 
 ```bash
 export SERVER_DEPLOYMENT=dev
+export USE_VAULT_CONFIG=true
 export VAULT_ADDR=http://localhost:8200
 export VAULT_TOKEN=root-token
 docker compose up --build

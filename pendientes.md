@@ -8,7 +8,7 @@ Cómo usarlo:
 - Al resolver un pendiente, cambiar `Estado` a `Resuelto`, agregar `Resuelto el` y una línea `Solución aplicada`.
 - Agregar hallazgos nuevos al final de su sección de prioridad, no reordenar los existentes.
 
-Última actualización: 2026-08-10.
+Última actualización: 2026-08-11.
 
 ## Resumen de estado
 
@@ -17,11 +17,11 @@ Cómo usarlo:
 | P-01 | SSRF sin validar en `url_download_file` | Alta | Resuelto |
 | P-02 | `/storage/public-upload` roto (falta `storage_public_bucket_name`) | Alta | Resuelto |
 | P-03 | README no documenta `storage_controller` | Alta | Resuelto |
-| P-04 | Embeddings no son reales (hash determinístico) | Media | Pendiente |
+| P-04 | Embeddings no son reales (hash determinístico) | Media | Resuelto |
 | P-05 | No hay integración LLM real en `rag_query` | Media | Pendiente |
 | P-06 | `.env.example` ausente (contradice al README) | Media | Resuelto |
 | P-07 | Cero tests pese a estar configurado en `pyproject.toml` | Media | Pendiente |
-| P-08 | Vector store real (Milvus) no implementado | Baja | Pendiente |
+| P-08 | Vector store real (Milvus) no implementado | Baja | Resuelto |
 | P-09 | `InMemoryRagServiceRepository` sin persistencia real | Baja | Pendiente |
 | P-10 | `storage-upload-vectorization` sin integrar (marcado en código) | Baja | Pendiente |
 | P-11 | `storage-chunk-consolidation` sin integrar (marcado en código) | Baja | Pendiente |
@@ -30,8 +30,9 @@ Cómo usarlo:
 | P-14 | `/health/ready` nunca refleja fallas reales de dependencias | Baja | Resuelto |
 | P-15 | Inconsistencia camelCase/snake_case entre `rag-services` y `embedding`/`storage` | Baja | Resuelto |
 | P-16 | `/storage/chunk` no declara sus campos como `Form()`, no aparece bien en OpenAPI | Baja | Resuelto |
-| P-17 | `Settings` no carga `.env` automáticamente pese a lo que dice el README | Baja | Pendiente |
+| P-17 | `Settings` no carga `.env` automáticamente pese a lo que dice el README | Baja | Resuelto |
 | P-18 | Adopción del estándar corporativo de calidad/seguridad (CI/CD, mypy, Bandit, pip-audit, Gitleaks, Trivy, coverage) | Media | Resuelto (parcial) |
+| P-19 | Imagen Docker creció ~1.6GB por embeddings locales (torch + sentence-transformers + pymilvus) | Baja | Pendiente |
 
 ---
 
@@ -73,12 +74,15 @@ Cómo usarlo:
 
 ### P-04 — Embeddings no son reales
 
-- **Estado:** Pendiente
+- **Estado:** Resuelto
 - **Detectado:** 2026-08-10
-- **Ubicación:** `app/services/rag/rag_service.py` (`_embed_text`).
-- **Descripción:** Pese a que `Settings.rag_embedding_model` sugiere `sentence-transformers/all-MiniLM-L6-v2`, el vector real se genera con hashing SHA-256 determinístico por token — no hay ningún modelo de embeddings cargado, y `sentence-transformers` ni siquiera está declarado en `pyproject.toml`.
-- **Impacto:** La "búsqueda semántica" hoy es similitud de bag-of-words con hashing, no similitud semántica real. Es intencional como scaffold autocontenido, pero es la brecha funcional más grande frente a lo que promete un sistema RAG.
-- **Acción sugerida:** decidir e integrar un motor de embeddings real (local vía `sentence-transformers` o remoto vía proveedor LLM) antes de considerar el servicio apto para retrieval en producción.
+- **Resuelto el:** 2026-08-11
+- **Ubicación:** `app/services/rag/rag_service.py` (`_embed_text`, eliminado); nuevo `app/infrastructure/embeddings/embedding_provider.py`.
+- **Descripción:** Pese a que `Settings.rag_embedding_model` sugería `sentence-transformers/all-MiniLM-L6-v2`, el vector real se generaba con hashing SHA-256 determinístico por token — no había ningún modelo de embeddings cargado.
+- **Solución aplicada:** se agregó `EmbeddingProvider` (usa `pymilvus.model.dense.SentenceTransformerEmbeddingFunction`, que envuelve `sentence-transformers`) cargando el modelo indicado en `RAG_EMBEDDING_MODEL`/`RAG_EMBEDDING_DEVICE`/`RAG_NORMALIZE_EMBEDDINGS`. Es una instancia única (`@lru_cache` en `app/api/dependencies/services.py`, `get_embedding_provider()`) compartida entre todas las colecciones/instancias de `RAGService` — cargar el modelo es costoso, no se puede repetir por request. `RAGService` ya no calcula `_vector_size` fijo (era `128` hardcodeado); ahora usa `embedding_provider.dim` (384 para el modelo default).
+- **Verificación real:** se corrió un test end-to-end (embeddings reales + Milvus real, ver P-08) indexando 3 documentos de temas distintos (gatos, finanzas, Python) y consultando `"lenguajes de programacion"` — el resultado top-1 fue correctamente el documento de Python (score 0.589) muy por encima del de gatos (score 0.256), algo que el hashing anterior no podía lograr al no capturar significado semántico.
+- **Pendiente relacionado no resuelto aquí:** el modelo (`sentence-transformers/all-MiniLM-L6-v2`) es un default genérico, no validado contra datos/dominio propios de negocio — antes de confiar en la calidad de retrieval para un caso de uso real, evaluar el modelo con datos reales del dominio y comparar contra alternativas (BGE, modelos en español, etc.) si el default no rinde bien.
+- **Impacto en imagen Docker:** agrega `torch`+`sentence-transformers`+`pymilvus` como dependencias core — ver P-19.
 
 ### P-05 — No hay integración LLM real en `rag_query`
 
@@ -114,11 +118,16 @@ Cómo usarlo:
 
 ### P-08 — Vector store real (Milvus) no implementado
 
-- **Estado:** Pendiente
-- **Ubicación:** `app/infrastructure/vector_store/vector_store_manager.py`.
-- **Descripción:** `Settings` trae todos los parámetros de Milvus (host, puerto, alias, métrica, tipo de índice, nlist, nprobe), pero `VectorStoreManager` solo tiene `InMemoryVectorStore`. Pedir `milvus` cae silenciosamente a memoria con un warning en logs.
-- **Impacto:** Ya documentado como exclusión intencional en el README. Implica pérdida de datos al reiniciar el proceso y sin soporte multi-instancia.
-- **Acción sugerida:** ya cubierta por la sección "Alcance actual / Exclusiones intencionales" del README; mantener como backlog de producto, no de bug.
+- **Estado:** Resuelto
+- **Detectado:** 2026-08-10
+- **Resuelto el:** 2026-08-11
+- **Ubicación:** `app/infrastructure/vector_store/vector_store_manager.py`; nuevo `app/infrastructure/vector_store/milvus_vector_store.py` y `vector_store_interface.py` (extraído para evitar import circular con `milvus_vector_store.py`).
+- **Descripción:** `Settings` traía todos los parámetros de Milvus (host, puerto, alias, métrica, tipo de índice, nlist, nprobe), pero `VectorStoreManager` solo tenía `InMemoryVectorStore`; pedir `milvus` caía silenciosamente a memoria con un warning en logs.
+- **Solución aplicada:** `MilvusVectorStore` implementa `VectorStoreInterface` completo usando `pymilvus.MilvusClient` (API moderna, no la de `connections.connect()` + `Collection`). Esquema de colección: `id` (VARCHAR, primary key), `vector` (FLOAT_VECTOR, dimensión del `EmbeddingProvider` activo) y `payload` (**JSON**) — este último preserva el contrato de dict libre que ya usa el resto de la app (`record["payload"].get(...)`) sin declarar una columna por cada clave de metadata posible. `filter_conditions` se traduce a expresiones de filtro de Milvus sobre ese campo JSON (`payload["clave"] == valor`). `VectorStoreManager` ahora instancia `MilvusVectorStore` de verdad cuando `VECTOR_DB_TYPE=milvus`.
+- **Seguridad — inyección de filtro:** las claves de `filter_conditions` (parcialmente controladas por el cliente vía `metadata_filter` en la API) se interpolan directo en la expresión de filtro Milvus (`payload["<key>"] == ...`); se agregó una validación (`_SAFE_KEY_PATTERN`, solo `[A-Za-z0-9_]+`) que rechaza claves con comillas u otros caracteres que podrían escapar la expresión — mismo principio aplicado en P-01 (SSRF) de validar entrada no confiable en la frontera.
+- **Verificación real contra Milvus real** (no solo tests unitarios): usando el Milvus del usuario (`localhost:19530`, `milvus-standalone:v2.6.21`, sin auth) se probó — creación de colección con prefijo de nombre resuelto correctamente, indexación de 3 documentos con chunking, búsqueda semántica (top-1 correcto), búsqueda con filtro por `department` (devolvió exactamente 1 resultado del department correcto), `retrieve_context`, `list_records`, y `delete_collection` (confirmado con `collection_exists` antes/después). Ver detalle de la prueba de búsqueda semántica en P-04.
+- **`MILVUS_ALIAS` sin uso real:** `MilvusClient` (API moderna) no tiene concepto de alias de conexión global (eso era de la API legacy `connections.connect(alias=...)`); el setting se deja en `Settings`/`.env.example` documentado como no usado por este adapter, por si se vuelve a necesitar con la API clásica.
+- **Impacto en imagen Docker:** ver P-19 — `pymilvus[model]` + `sentence-transformers` + `torch` (CPU-only, fijado vía índice de `uv`) agregan ~1.6GB al `.venv`.
 
 ### P-09 — `InMemoryRagServiceRepository` sin persistencia real
 
@@ -126,7 +135,7 @@ Cómo usarlo:
 - **Ubicación:** `app/infrastructure/repositories/in_memory_rag_service_repository.py`.
 - **Descripción:** Las definiciones de `rag-services` viven solo en memoria del proceso.
 - **Impacto:** Se pierden en cada restart/deploy y no se comparten entre réplicas si el servicio escala horizontalmente.
-- **Acción sugerida:** mismo tratamiento que P-08 — backlog de producto (requiere elegir motor de persistencia).
+- **Acción sugerida:** backlog de producto (requiere elegir motor de persistencia). **No relacionado con la integración de Milvus (P-08)**: este pendiente es sobre el almacén de las *definiciones* de `rag-services` (nombre, proveedor LLM, etc.), un dominio distinto al de los vectores/documentos que sí ahora persisten en Milvus.
 
 ### P-10 — `storage-upload-vectorization` sin integrar
 
@@ -134,7 +143,7 @@ Cómo usarlo:
 - **Ubicación:** `app/services/storage_service.py` (`upload_file`), marcado explícitamente en código como `PENDIENTE_INTEGRACION`.
 - **Descripción:** En el micro Java origen, un upload exitoso podía disparar vectorización automática vía `ParameterCommonService`, `VectorStoreService`, `DocumentCommonService`. Esa continuación no se migró.
 - **Impacto:** El upload conserva la API pública pero no ejecuta efectos laterales de vectorización ni actualización de estado documental.
-- **Acción sugerida:** decidir si se replica ese flujo o si vectorización queda como paso explícito vía `/embedding/save_document_vecstore` (enfoque actual, más simple).
+- **Acción sugerida:** decidir si se replica ese flujo o si vectorización queda como paso explícito vía `/embedding/save_document_vecstore` (enfoque actual, más simple). **Con embeddings/Milvus reales (P-04/P-08) esta decisión ya no está bloqueada técnicamente** — antes no había vectorización real que disparar; ahora es una decisión de alcance de producto, no una limitación técnica.
 
 ### P-11 — `storage-chunk-consolidation` sin integrar
 
@@ -198,12 +207,20 @@ Cómo usarlo:
 
 ### P-17 — `Settings` no carga `.env` automáticamente pese a lo que dice el README
 
-- **Estado:** Pendiente
+- **Estado:** Resuelto
 - **Detectado:** 2026-08-10, al crear `.env.example` para P-06.
-- **Ubicación:** `app/core/config.py` (`SettingsConfigDict(extra="ignore", populate_by_name=True)`).
-- **Descripción:** El README afirma: *"el archivo `.env` definido en `Settings` queda como fallback, no como requisito"*. Sin embargo, `SettingsConfigDict` no define `env_file`, por lo que `pydantic-settings` **no** lee un `.env` del disco automáticamente; solo toma variables ya presentes en el entorno del proceso (`os.environ`) o las que llegan explícitamente vía Vault (`Settings(**config)` en `get_settings()`). Un `.env` en la raíz del repo, sin exportarlo antes por otro medio, es ignorado silenciosamente.
-- **Impacto:** Expectativa incorrecta para quien siga el README al pie de la letra: crear un `.env` local no alcanza para configurar el servicio si esas variables no están además exportadas en el shell o inyectadas por Vault/`run-local.sh`. Es coherente con que el flujo real y recomendado sea `run-local.sh` (que sí exporta variables al proceso), pero el `.env` "fallback" mencionado en el README no está realmente cableado.
-- **Acción sugerida:** o bien (a) agregar `env_file=".env"` a `SettingsConfigDict` para que el comportamiento coincida con lo documentado, o (b) corregir el README para dejar claro que `.env` no se carga automáticamente y que el mecanismo soportado es exportar variables (manualmente o vía `run-local.sh`)/Vault. Requiere decidir cuál de las dos es el comportamiento deseado antes de tocar código.
+- **Resuelto el:** 2026-08-11.
+- **Ubicación:** `app/core/config.py` (`Settings.model_config`, `get_settings()`); `app/core/vault.py` (`is_vault_configured`).
+- **Descripción:** El README afirmaba que `.env` quedaba como fallback, pero `SettingsConfigDict` no definía `env_file`, así que `pydantic-settings` no leía `.env` del disco; y encima Vault era un requisito duro (`get_settings()` siempre llamaba a `get_vault_client()`, que fallaba si `VAULT_ADDR`/`VAULT_TOKEN` no estaban, sin ninguna forma de omitirlo para trabajo local).
+- **Solución aplicada:**
+  - `Settings.model_config` ahora incluye `env_file=".env"` (+ `env_file_encoding="utf-8"`) — con esto `.env` sí se carga de verdad como fallback, por debajo de variables ya exportadas al proceso.
+  - Se agregó `USE_VAULT_CONFIG` (default `false`), **mismo patrón explícito** que `USE_SPRING_CLOUD_CONFIG`/`EUREKA_ENABLED` — no se infiere nada por presencia de `VAULT_ADDR`/`VAULT_TOKEN`, es una decisión declarada. `is_vault_configured()` (`app/core/vault.py`) la lee directo de `os.environ` (Vault no puede depender de `Settings`, que es justo lo que está por construirse).
+  - `get_settings()`: si `USE_VAULT_CONFIG=true` → intenta Vault, y si faltan `VAULT_ADDR`/`VAULT_TOKEN` falla fuerte con el mensaje ya existente en `VaultClient` (no cae a `.env` en silencio por una config a medias). Si `USE_VAULT_CONFIG` es false/ausente → construye `Settings()` directo, que resuelve desde variables de entorno y, como fallback, desde `.env`.
+  - Se creó un `.env` real en la raíz (no versionado, ya cubierto por `.gitignore`) para trabajo local: `USE_VAULT_CONFIG=false`, `USE_SPRING_CLOUD_CONFIG=false`, `EUREKA_ENABLED=false`, y `VECTOR_DB_TYPE=milvus` apuntando al Milvus real ya usado en P-08.
+  - Se agregó el alias `EUREKA_CLIENT_SERVICEURL_DEFAULTZONE` a `eureka_server_url` (convención Spring Boot), para interoperar con `company-secrets`/ambientes compartidos con microservicios Java que ya usan ese nombre de variable.
+- **Verificación real** (no solo lectura de código): se probaron 3 casos con `Settings`/`get_settings()` aislados de variables de entorno del shell (`env -i`) — (1) sin `USE_VAULT_CONFIG`: `is_vault_configured()` devuelve `False` y `get_settings()` carga correctamente todo desde el `.env` del repo (`vector_db_type=milvus`, `debug=True`, etc.); (2) `USE_VAULT_CONFIG=true` sin credenciales: falla con `ValueError: Missing Vault environment variables: VAULT_ADDR, VAULT_TOKEN`, tal como se esperaba; (3) `EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://eureka-server:8761/eureka/` resuelve correctamente `eureka_server_url`.
+- **Efecto colateral encontrado y corregido:** al revisar `.gitignore` para confirmar que `.env` quedaba excluido, se encontró que la línea `.github` (sin más calificación) excluía **todo el directorio `.github/`**, incluyendo `.github/workflows/ci.yml` creado en P-18 — ese archivo nunca podría haberse subido a git, dejando el pipeline de CI/CD inexistente en la práctica pese a estar creado en disco. Se quitó esa línea de `.gitignore`. Ver P-18 para el detalle de qué falta para confirmar que el pipeline corre en un GitHub Actions real.
+- **Redundancia encontrada y corregida (2026-08-11, validación pedida por el usuario de `config.py`/`vault.py`/`eureka.py`):** `Settings` tenía dos campos — `app_name` y `eureka_app_name` — que apuntaban al **mismo** `validation_alias` (`EUREKA_APP_NAME`) con el **mismo** default (`"ai-rag-service-manager"`); por construcción siempre iban a tener el mismo valor, nunca podían divergir. `EurekaRegistrar` usaba `eureka_app_name` en 3 lugares mientras el resto del código (`main.py`, `health_controller.py`, `config_server.py`) ya usaba `app_name` para el mismo propósito. Se eliminó el campo duplicado `eureka_app_name` y se migró `EurekaRegistrar` a usar `settings.app_name` directamente. Verificado: `Settings()` ya no expone `eureka_app_name`, y `EurekaRegistrar` sigue resolviendo el nombre correctamente desde `app_name`. Revisión completa de aliases (script que agrupa todos los `AliasChoices` de `config.py` por variable de entorno) confirma que no queda ningún otro alias reclamado por dos campos distintos. Los pares `EUREKA_SERVER_URL`/`EUREKA_SERVER`, `EUREKA_REGISTER_MAX_RETRIES`/`REGISTER_MAX_RETRIES`, etc. (un alias con prefijo `EUREKA_` y otro genérico) **no son redundancia** — es el mismo patrón de interoperabilidad con `company-secrets`/variables compartidas entre microservicios que ya se usa en todo el archivo, no una duplicación accidental.
 
 ### P-18 — Adopción del estándar corporativo de calidad/seguridad
 
@@ -270,3 +287,15 @@ Cómo usarlo:
 
 - **Impacto:** el microservicio pasó de no tener ninguna herramienta de calidad/seguridad ejecutable a tener las 6 corriendo en 0 (o con excepciones documentadas) desde `pyproject.toml`, más un pipeline de CI/CD definido. Lo que falta para considerar el estándar "cumplido" en sentido estricto es acotado: tests reales (P-07), decidir sobre Python 3.12, y confirmar el pipeline en un runner real.
 - **Acción sugerida (lo que queda):** (1) escribir la suite de tests de P-07 y quitar `continue-on-error` del job de pytest en CI; (2) decidir upgrade a Python 3.12 (afecta Dockerfile, `requires-python` y `[tool.mypy].python_version` a la vez); (3) push a un repo real de GitHub para confirmar que `ci.yml` corre correctamente en Actions; (4) resolver o aceptar formalmente las vulnerabilidades de Trivy que sí tienen fix disponible pero no se resolvieron con el `apt-get upgrade` inicial (ver nota de seguimiento); (5) si se necesita trazabilidad completa entre microservicios, propagar `X-Correlation-ID` en las llamadas salientes de `ConfigServerClient`, `EurekaRegistrar` y `StorageClient`.
+- **Corrección 2026-08-11 (encontrada al resolver P-17):** `.gitignore` tenía una línea `.github` que excluía **todo** el directorio, incluyendo `.github/workflows/ci.yml` creado en esta misma entrada — el archivo nunca podría haberse commiteado, dejando el punto (3) de arriba literalmente imposible de cumplir hasta ahora. Se quitó esa línea; `git status` ya lo ve como archivo normal listo para `git add`.
+
+### P-19 — Imagen Docker creció por embeddings locales (torch + sentence-transformers + pymilvus)
+
+- **Estado:** Pendiente
+- **Detectado:** 2026-08-11, al implementar P-04/P-08.
+- **Ubicación:** `pyproject.toml` (dependencias core), `Dockerfile`.
+- **Descripción:** Resolver P-04 (embeddings reales) requiere `sentence-transformers`, que arrastra `torch` como dependencia. El wheel de PyPI de `torch` trae CUDA completo por defecto (~5.4GB de `.venv`) aunque el servicio está configurado para CPU (`RAG_EMBEDDING_DEVICE=cpu`); se mitigó fijando `torch` contra el índice CPU-only oficial de PyTorch (`[tool.uv.sources]`/`[[tool.uv.index]]` en `pyproject.toml`), lo que bajó el `.venv` a ~1.6GB. La imagen final construida (con parches de SO de P-18 incluidos) pesa **2.82GB**.
+- **Impacto:** Imagen notablemente más pesada que antes de esta integración (previamente sin ninguna dependencia de ML). Tiempos de build/pull más largos, más superficie para Trivy (nuevas dependencias de sistema que puedan traer los paquetes de ML). No es un bug — es el costo real de embeddings locales de calidad razonable — pero vale la pena que quede como decisión consciente y no un efecto secundario no documentado.
+- **Mitigaciones ya aplicadas:** build-time pre-download del modelo default + `HF_HUB_OFFLINE=1` en runtime (evita descargas/verificaciones de red en cada arranque, ver Dockerfile); `torch` fijado a CPU-only (evita ~4GB de librerías CUDA innecesarias).
+- **Acción sugerida:** si el tamaño de imagen se vuelve un problema operativo (tiempos de deploy, costo de registry, cold-start en autoscaling), evaluar alternativas más livianas: (a) un proveedor de embeddings por API (OpenAI, Cohere, Voyage — quita `torch`/`sentence-transformers` del todo, cambia el trade-off a latencia de red + costo por request); (b) modelos ONNX-only sin el runtime completo de `sentence-transformers`/`transformers` (más liviano pero más trabajo de integración); (c) separar el servicio de embeddings en un microservicio aparte si varios servicios lo van a reutilizar. Ninguna de estas se implementó — la decisión actual (local, CPU, `sentence-transformers`) fue la que pidió explícitamente el usuario.
+- **Nota de auditoría (relacionado con P-18/pip-audit):** `pip-audit` no puede verificar `torch` porque se resuelve desde el índice CPU-only de PyTorch, no desde PyPI estándar (`torch==2.13.0+cpu` no tiene match en la base de datos de vulnerabilidades por ese sufijo de version). Es un "skip", no una vulnerabilidad confirmada ni descartada — si se necesita auditoría real de `torch`, hay que verificarlo manualmente contra los avisos de seguridad de PyTorch.

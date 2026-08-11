@@ -21,6 +21,9 @@ dependencies = [
   "uvicorn[standard]>=0.32.0,<1.0.0",
   "pydantic-settings>=2.6.1,<3.0.0",
   "hvac>=2.4.0",
+  "pymilvus[model]>=2.5.0,<4.0.0",
+  "sentence-transformers>=3.0.0,<6.0.0",
+  "torch>=2.0.0,<3.0.0",
 ]
 
 [project.optional-dependencies]
@@ -36,6 +39,18 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
+
+[tool.uv]
+# El wheel de PyPI para "torch" trae CUDA completo (varios GB) aunque el
+# servicio corre con RAG_EMBEDDING_DEVICE=cpu por defecto. Se resuelve torch
+# contra el indice CPU-only oficial de PyTorch para no inflar la imagen.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
 
 [tool.ruff]
 line-length = 100
@@ -83,7 +98,7 @@ warn_redundant_casts = true
 # Dependencias de terceros sin stubs propios ni marcador py.typed: se ignoran
 # solo los imports faltantes, no se relaja ninguna otra regla.
 [[tool.mypy.overrides]]
-module = ["hvac.*", "py_eureka_client.*", "google.cloud.*", "google.oauth2.*"]
+module = ["hvac.*", "py_eureka_client.*", "google.cloud.*", "google.oauth2.*", "pymilvus.*"]
 ignore_missing_imports = true
 
 [tool.fastapi]

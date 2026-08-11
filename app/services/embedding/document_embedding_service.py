@@ -18,6 +18,7 @@ from typing import Any
 
 from app.core.config import Settings
 from app.infrastructure.clients.storage_client import StorageClient
+from app.infrastructure.embeddings.embedding_provider import EmbeddingProvider
 from app.infrastructure.vector_store.vector_store_manager import VectorStoreManager
 from app.services.rag.rag_service import RAGService
 
@@ -32,10 +33,12 @@ class DocumentEmbeddingService:
         settings: Settings,
         storage_client: StorageClient,
         vector_store_manager: VectorStoreManager,
+        embedding_provider: EmbeddingProvider,
     ) -> None:
         self._settings = settings
         self._storage_client = storage_client
         self._vector_store_manager = vector_store_manager
+        self._embedding_provider = embedding_provider
         self._rag_services: dict[str, RAGService] = {}
 
     def _get_rag_service(self, index_name: str) -> RAGService:
@@ -45,6 +48,7 @@ class DocumentEmbeddingService:
                 settings=self._settings,
                 collection_name=index_name,
                 vector_store_manager=self._vector_store_manager,
+                embedding_provider=self._embedding_provider,
             )
         return self._rag_services[index_name]
 

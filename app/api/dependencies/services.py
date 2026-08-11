@@ -4,6 +4,7 @@ from app.core.config import get_settings
 from app.domain.repositories.rag_service_repository import RagServiceRepository
 from app.infrastructure.clients.storage_client import StorageClient
 from app.infrastructure.clients.storage_config import StorageConfig
+from app.infrastructure.embeddings.embedding_provider import EmbeddingProvider
 from app.infrastructure.repositories.in_memory_rag_service_repository import (
     InMemoryRagServiceRepository,
 )
@@ -30,6 +31,13 @@ def get_vector_store_manager() -> VectorStoreManager:
 
 
 @lru_cache
+def get_embedding_provider() -> EmbeddingProvider:
+    """Instancia unica: cargar el modelo de embeddings es costoso, no se
+    debe repetir por request ni por coleccion."""
+    return EmbeddingProvider(settings=get_settings())
+
+
+@lru_cache
 def get_storage_config() -> StorageConfig:
     return StorageConfig(settings=get_settings())
 
@@ -50,6 +58,7 @@ def get_document_embedding_service() -> DocumentEmbeddingService:
         settings=get_settings(),
         storage_client=get_storage_client(),
         vector_store_manager=get_vector_store_manager(),
+        embedding_provider=get_embedding_provider(),
     )
 
 
@@ -58,6 +67,6 @@ def get_rag_agent() -> RAGAgent:
     settings = get_settings()
     return RAGAgent(
         collection_name=settings.rag_agent_collection_name,
-        embedding_model=settings.rag_embedding_model,
         vector_store_manager=get_vector_store_manager(),
+        embedding_provider=get_embedding_provider(),
     )

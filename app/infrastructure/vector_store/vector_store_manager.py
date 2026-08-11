@@ -4,64 +4,18 @@ Esta capa encapsula el acceso al backend vectorial. No expone HTTP ni conoce la
 logica de negocio del dominio; solo ofrece operaciones tecnicas sobre
 colecciones y vectores.
 
-El contrato estable esta definido por ``VectorStoreInterface`` y el manager
-actua como facade para ocultar la implementacion concreta.
+El contrato estable esta definido por ``VectorStoreInterface`` (modulo
+``vector_store_interface.py``) y el manager actua como facade para ocultar la
+implementacion concreta.
 """
 
-import logging
 import math
-from abc import ABC, abstractmethod
 from typing import Any
 from uuid import uuid4
 
 from app.core.config import Settings
-
-logger = logging.getLogger(__name__)
-
-
-class VectorStoreInterface(ABC):
-    """Contrato tecnico para cualquier backend vectorial soportado."""
-
-    @abstractmethod
-    def create_collection(self, collection_name: str, vector_size: int, **kwargs: Any) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def insert_vectors(
-        self,
-        collection_name: str,
-        vectors: list[list[float]],
-        payloads: list[dict[str, Any]] | None = None,
-        ids: list[str] | None = None,
-    ) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def search(
-        self,
-        collection_name: str,
-        query_vector: list[float],
-        top_k: int = 5,
-        filter_conditions: dict[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
-        raise NotImplementedError
-
-    @abstractmethod
-    def list_records(
-        self,
-        collection_name: str,
-        limit: int = 100,
-        filter_conditions: dict[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
-        raise NotImplementedError
-
-    @abstractmethod
-    def delete_collection(self, collection_name: str) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def collection_exists(self, collection_name: str) -> bool:
-        raise NotImplementedError
+from app.infrastructure.vector_store.milvus_vector_store import MilvusVectorStore
+from app.infrastructure.vector_store.vector_store_interface import VectorStoreInterface
 
 
 class InMemoryVectorStore(VectorStoreInterface):
@@ -155,9 +109,8 @@ class InMemoryVectorStore(VectorStoreInterface):
 class VectorStoreManager:
     """Facade de infraestructura para el backend vectorial configurado.
 
-    Hoy selecciona una implementacion en memoria aunque se pida ``milvus``.
-    Esa decision deja estable el contrato mientras la
-    integracion concreta aun no se incorpora.
+    Selecciona ``MilvusVectorStore`` cuando ``VECTOR_DB_TYPE=milvus`` y
+    ``InMemoryVectorStore`` en cualquier otro caso (incluido el default).
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -165,12 +118,9 @@ class VectorStoreManager:
         self.backend_name = (
             requested_backend if requested_backend in {"memory", "milvus"} else "memory"
         )
-        if self.backend_name != "memory":
-            logger.warning(
-                "vector backend '%s' requested but this scaffold uses the in-memory adapter until a concrete integration is added",
-                self.backend_name,
-            )
-        self.store: VectorStoreInterface = InMemoryVectorStore()
+        self.store: VectorStoreInterface = (
+            MilvusVectorStore(settings) if self.backend_name == "milvus" else InMemoryVectorStore()
+        )
 
     def create_collection(self, collection_name: str, vector_size: int, **kwargs: Any) -> None:
         """Delega la creacion de coleccion al adapter configurado."""

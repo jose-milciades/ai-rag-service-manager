@@ -3,16 +3,27 @@ from functools import lru_cache
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.core.vault import get_vault_client
+from app.core.vault import get_vault_client, is_vault_configured
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         extra="ignore",
         populate_by_name=True,
+        # Fallback real cuando no hay Vault (ver get_settings() y
+        # pendientes.md P-17): variables ya exportadas al proceso siguen
+        # teniendo prioridad sobre el archivo, y este se ignora en silencio
+        # si no existe -- no es un requisito, solo un fallback local.
+        env_file=".env",
+        env_file_encoding="utf-8",
     )
 
     debug: bool = Field(default=False, validation_alias=AliasChoices("DEBUG"))
+    # EUREKA_APP_NAME es tambien el nombre general de la app (titulo FastAPI,
+    # logs, path de Spring Config, respuesta de "/"), no solo lo que se
+    # registra en Eureka -- por eso no existe un "eureka_app_name" aparte:
+    # seria un duplicado exacto (mismo alias, mismo default). EurekaRegistrar
+    # usa este mismo campo.
     app_name: str = Field(
         default="ai-rag-service-manager",
         validation_alias=AliasChoices("EUREKA_APP_NAME"),
@@ -66,11 +77,9 @@ class Settings(BaseSettings):
     )
     eureka_server_url: str = Field(
         default="http://localhost:8761/eureka/",
-        validation_alias=AliasChoices("EUREKA_SERVER_URL", "EUREKA_SERVER"),
-    )
-    eureka_app_name: str = Field(
-        default="ai-rag-service-manager",
-        validation_alias=AliasChoices("EUREKA_APP_NAME"),
+        validation_alias=AliasChoices(
+            "EUREKA_SERVER_URL", "EUREKA_SERVER", "EUREKA_CLIENT_SERVICEURL_DEFAULTZONE"
+        ),
     )
     eureka_instance_host: str = Field(
         default="ai-rag-service-manager",
@@ -182,7 +191,18 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    vault = get_vault_client()
-    config = vault.load_configs(["common", "ai-rag-service-manager", "storage"])
-    # print("Loaded configuration keys from Vault:\n" + "\n".join(sorted(config.keys())))
-    return Settings(**config)
+    """Construye ``Settings`` usando Vault solo si ``USE_VAULT_CONFIG=true``.
+
+    Mismo patron que ``USE_SPRING_CLOUD_CONFIG``/``EUREKA_ENABLED``: una
+    variable explicita decide, no se infiere nada por presencia de otras
+    variables. Con ``USE_VAULT_CONFIG=true`` pero sin
+    ``VAULT_ADDR``/``VAULT_TOKEN``, falla fuerte via ``VaultClient``. Con
+    ``USE_VAULT_CONFIG`` en false/ausente (default), la config sale de
+    variables ya exportadas al proceso y, como fallback, de un archivo
+    ``.env`` si existe (ver ``Settings.model_config``).
+    """
+    if is_vault_configured():
+        vault = get_vault_client()
+        config = vault.load_configs(["common", "ai-rag-service-manager", "storage"])
+        return Settings(**config)
+    return Settings()

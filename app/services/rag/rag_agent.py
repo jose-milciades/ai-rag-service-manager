@@ -9,6 +9,7 @@ componente conversacional o de orquestacion.
 from typing import Any
 
 from app.core.config import get_settings
+from app.infrastructure.embeddings.embedding_provider import EmbeddingProvider
 from app.infrastructure.vector_store.vector_store_manager import VectorStoreManager
 from app.services.rag.rag_service import RAGService
 
@@ -19,8 +20,8 @@ class RAGAgent:
     def __init__(
         self,
         collection_name: str,
-        embedding_model: str,
         vector_store_manager: VectorStoreManager,
+        embedding_provider: EmbeddingProvider,
     ) -> None:
         self.name = "rag"
         self.description = (
@@ -31,8 +32,8 @@ class RAGAgent:
         self.rag_service = RAGService(
             settings=self._settings,
             collection_name=collection_name,
-            embedding_model=embedding_model,
             vector_store_manager=vector_store_manager,
+            embedding_provider=embedding_provider,
         )
 
     def index_company_documents(

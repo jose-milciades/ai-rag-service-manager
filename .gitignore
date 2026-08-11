@@ -65,6 +65,3 @@ env/
 .sonar/
 .sonarlint/
 .sonar-scanner-dump.properties
-
-# GitHub specific files
-.github

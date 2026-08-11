@@ -41,15 +41,15 @@ class EurekaRegistrar:
         for attempt in range(1, self._settings.eureka_register_max_retries + 1):
             try:
                 logger.info(
-                    "registering %s in Eureka (attempt %s)", self._settings.eureka_app_name, attempt
+                    "registering %s in Eureka (attempt %s)", self._settings.app_name, attempt
                 )
                 await eureka_client.init_async(
                     eureka_server=self._settings.eureka_server_url,
-                    app_name=self._settings.eureka_app_name,
+                    app_name=self._settings.app_name,
                     instance_port=self._settings.app_port,
                     instance_host=self._settings.eureka_instance_host,
                     instance_ip=self._settings.eureka_instance_ip,
-                    instance_id=f"{self._settings.eureka_app_name}:{self._settings.app_port}",
+                    instance_id=f"{self._settings.app_name}:{self._settings.app_port}",
                 )
                 self._registered = True
                 return {

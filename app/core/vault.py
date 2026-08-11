@@ -10,6 +10,20 @@ def _is_truthy(value: str | None) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def is_vault_configured() -> bool:
+    """Indica si se debe usar Vault, igual patron que ``EUREKA_ENABLED`` y
+    ``USE_SPRING_CLOUD_CONFIG``: una variable explicita, no una inferencia
+    por presencia de otras variables. Por defecto false, para que trabajo
+    local no dependa de tener un Vault corriendo.
+
+    Se usa antes de intentar construir un ``VaultClient`` (ver
+    ``app.core.config.get_settings``). Si es true pero falta
+    ``VAULT_ADDR``/``VAULT_TOKEN``, ``VaultClient`` falla fuerte con un
+    mensaje claro lista lo que falta, en vez de caer en silencio a `.env`.
+    """
+    return _is_truthy(os.getenv("USE_VAULT_CONFIG"))
+
+
 def _configure_tls_warning_suppression(vault_skip_verify: bool) -> None:
     if vault_skip_verify:
         urllib3.disable_warnings(InsecureRequestWarning)
