@@ -187,6 +187,10 @@ class Settings(BaseSettings):
         default=1000,
         validation_alias=AliasChoices("RAG_MAX_EMBEDDINGS_PER_DOCUMENT"),
     )
+    rag_unique_code_list_limit: int = Field(
+        default=10000,
+        validation_alias=AliasChoices("RAG_UNIQUE_CODE_LIST_LIMIT"),
+    )
 
 
 @lru_cache

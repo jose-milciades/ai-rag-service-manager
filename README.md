@@ -54,6 +54,43 @@ La parte documental permite:
 - ejecutar búsqueda semántica;
 - recuperar contexto para preguntas tipo RAG.
 
+## Arquitectura del sistema (multi-servicio)
+
+**Principio:** `ai-rag-service-manager` es el único microservicio con acceso directo a storage (Google Cloud Storage) y al vector store. Ningún otro microservicio debe tener credenciales de GCS ni un cliente propio contra la base vectorial — si necesita subir, leer, indexar o consultar documentos, lo hace a través de este servicio.
+
+Esto no cambia dónde llegan las peticiones del frontend: `edi-ai-proyectos-backend` (Java) sigue siendo el punto de entrada de la API para el frontend. Lo que cambia es que, puertas adentro, Java deja de resolver storage y vectorización por sí mismo y enruta esas operaciones a `ai-rag-service-manager`:
+
+```text
+Frontend
+   │
+   ▼
+edi-ai-proyectos-backend (Java) ── sigue siendo el punto de entrada de la
+   │                                API para el frontend; ya no debe tener
+   │                                acceso directo a GCS ni a un vector store.
+   │
+   ├── POST /api/v1/storage/upload         ──┐
+   ├── POST /api/v1/storage/chunk           │  ai-rag-service-manager
+   ├── GET  /api/v1/storage/get             ├─ (único cliente de GCS
+   ├── GET  /api/v1/storage/getFileByte     │   de todo el sistema)
+   ├── POST /api/v1/storage/public-upload  ─┘
+   │
+   └── POST /api/v1/embedding/save_document_vecstore  ──┐
+       POST /api/v1/embedding/delete_index_vecstore     │  ai-rag-service-manager
+       POST /api/v1/embedding/list_documents            ├─ (único cliente del
+       POST /api/v1/embedding/get_embeddings_by_unique_code │  vector store de
+       POST /api/v1/embedding/search_similar_documents  │   todo el sistema)
+       POST /api/v1/embedding/rag_query                ─┘
+```
+
+Los embeddings siguen la misma regla que el storage: cualquier operación de indexación, borrado, listado o búsqueda semántica se consulta contra `ai-rag-service-manager` (`/api/v1/embedding/*`), no contra un motor de embeddings propio de Java ni de otro microservicio.
+
+Estado real hoy en `edi-ai-proyectos-backend` (no es aspiracional, es lo verificado en este repo Java — ver `pendientes.md` P-10/P-11/P-20/P-21/P-22/P-23/P-24/P-25/P-26):
+
+- **Embeddings ya enrutados y activos, sin brechas conocidas:** los cuatro métodos de vectorización de `VectorStoreServiceImpl` (`saveEmbeddingFile`, `deleteIndexVecstore`, `deleteEmbeddingDocument`, `getListUniqueCodeDocuments`) llaman a `ai-rag-service-manager` (`app.rag-service.*`), no a `analysis-ai-service`. Los últimos dos se repuntaron una vez agregados los endpoints `delete_document`/`list_unique_code_documents` (`pendientes.md` P-22/P-23) — el campo `openaiConfig` quedó sin uso en esa clase y se eliminó.
+- **Storage todavía no cortado:** existe `RagServiceStorageClient` (implementación de `StorageService` contra `ai-rag-service-manager`), pero `StorageServiceImpl` (GCS local) sigue siendo el bean `@Primary` activo — el corte se hace cambiando el `@Qualifier` una vez que se pruebe en un ambiente real (no se activó de una vez porque no había forma de probarlo end-to-end desde este entorno).
+
+Detalle completo — mapeo de campos, incompatibilidades de contrato ya resueltas, checklist de migración de Java: ver [`integracion-java-storage.md`](./integracion-java-storage.md).
+
 ## Arquitectura
 
 ### Capas
@@ -675,6 +712,8 @@ Pipeline mínimo en [`.github/workflows/ci.yml`](./.github/workflows/ci.yml): Ru
 Contrato completo de request/response de cada endpoint (incluyendo `storage`, que replica la superficie pública de un microservicio Java de storage): ver [`api.md`](./api.md).
 
 Brechas conocidas, deuda técnica y su trazabilidad de resolución: ver [`pendientes.md`](./pendientes.md).
+
+Plan de migración del microservicio Java (`edi-ai-proyectos-backend`) para que consuma `storage`/`embedding` de este servicio en vez de GCS local + `analysis-ai-service`, con el mapeo de campos exacto y las incompatibilidades de contrato detectadas: ver [`integracion-java-storage.md`](./integracion-java-storage.md).
 
 ## Docker
 

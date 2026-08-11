@@ -91,6 +91,18 @@ class InMemoryVectorStore(VectorStoreInterface):
         """Elimina completamente una coleccion en memoria."""
         self._collections.pop(collection_name, None)
 
+    def delete_records(self, collection_name: str, filter_conditions: dict[str, Any]) -> int:
+        """Elimina registros que cumplan el filtro exacto indicado; retorna cuantos se borraron."""
+        records = self._collections.get(collection_name, [])
+        kept, deleted = [], 0
+        for record in records:
+            if all(record["payload"].get(key) == value for key, value in filter_conditions.items()):
+                deleted += 1
+            else:
+                kept.append(record)
+        self._collections[collection_name] = kept
+        return deleted
+
     def collection_exists(self, collection_name: str) -> bool:
         """Indica si la coleccion existe en el store actual."""
         return collection_name in self._collections
@@ -158,6 +170,17 @@ class VectorStoreManager:
     def delete_collection(self, collection_name: str) -> None:
         """Delega borrado de coleccion al backend activo."""
         self.store.delete_collection(collection_name)
+
+    def delete_records(self, collection_name: str, filter_conditions: dict[str, Any]) -> int:
+        """Delega borrado de registros filtrados al backend activo.
+
+        ``filter_conditions`` es obligatorio: sin filtro, borrar "por registro"
+        equivaldria a vaciar la coleccion entera sin pasar por
+        ``delete_collection``, que es la operacion pensada para ese caso.
+        """
+        if not filter_conditions:
+            raise ValueError("filter_conditions is required to delete records")
+        return self.store.delete_records(collection_name, filter_conditions)
 
     def collection_exists(self, collection_name: str) -> bool:
         """Delega verificacion de existencia al backend activo."""

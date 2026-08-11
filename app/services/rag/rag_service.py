@@ -8,20 +8,42 @@ El embedding real (modelo cargado una sola vez) vive en ``EmbeddingProvider``
 y se inyecta aqui; ``RAGService`` no sabe que libreria concreta lo genera.
 """
 
+import re
 from typing import Any
 
 from app.core.config import Settings
 from app.infrastructure.embeddings.embedding_provider import EmbeddingProvider
 from app.infrastructure.vector_store.vector_store_manager import VectorStoreManager
 
+# re.ASCII: sin este flag, \W tambien dejaria pasar letras unicode (acentos,
+# otros alfabetos) por ser "word chars" en Python -- Milvus exige ASCII puro.
+_INVALID_COLLECTION_CHARS = re.compile(r"\W", re.ASCII)
+
+
+def _sanitize_collection_name(name: str) -> str:
+    """Milvus solo acepta letras, numeros y guion bajo en nombres de coleccion
+    (ver pendientes.md P-25 -- encontrado probando P-10 contra Milvus real:
+    ``project-42`` es un nombre valido en el backend en memoria pero invalido
+    en Milvus). Cualquier otro caracter (guiones, espacios, puntos, etc.) se
+    reemplaza por "_"; si el resultado queda vacio o empieza con un digito
+    (tambien invalido en Milvus), se le antepone un guion bajo.
+    """
+    sanitized = _INVALID_COLLECTION_CHARS.sub("_", name)
+    if not sanitized:
+        return "_"
+    if sanitized[0].isdigit():
+        sanitized = f"_{sanitized}"
+    return sanitized
+
 
 def _resolve_collection_name(prefix: str, collection_name: str) -> str:
-    cleaned_prefix = prefix.strip()
+    cleaned_name = _sanitize_collection_name(collection_name)
+    cleaned_prefix = _sanitize_collection_name(prefix.strip()) if prefix.strip() else ""
     if not cleaned_prefix:
-        return collection_name
-    if collection_name == cleaned_prefix or collection_name.startswith(f"{cleaned_prefix}_"):
-        return collection_name
-    return f"{cleaned_prefix}_{collection_name}"
+        return cleaned_name
+    if cleaned_name == cleaned_prefix or cleaned_name.startswith(f"{cleaned_prefix}_"):
+        return cleaned_name
+    return f"{cleaned_prefix}_{cleaned_name}"
 
 
 class RAGService:
@@ -119,6 +141,10 @@ class RAGService:
     def clear_collection(self) -> None:
         """Elimina completamente la coleccion vectorial actual."""
         self._vector_store.delete_collection(self.collection_name)
+
+    def delete_records(self, filter_conditions: dict[str, Any]) -> int:
+        """Elimina registros de la coleccion activa que cumplan el filtro indicado."""
+        return self._vector_store.delete_records(self.collection_name, filter_conditions)
 
     def _split_text(self, text: str) -> list[str]:
         """Divide un texto en chunks usando tamano y overlap configurados."""

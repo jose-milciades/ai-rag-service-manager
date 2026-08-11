@@ -12,10 +12,12 @@ No implementa logica de negocio compleja. Todo el trabajo real se delega a:
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, status
 
 from app.api.dependencies.services import get_document_embedding_service, get_rag_agent
 from app.schemas.embedding import (
+    DeleteDocumentVecstoreRequest,
+    DeleteDocumentVecstoreResponse,
     DeleteIndexVecstoreRequest,
     GetEmbeddingsByUniqueCodeRequest,
     GetEmbeddingsByUniqueCodeResponse,
@@ -28,6 +30,7 @@ from app.schemas.embedding import (
     SaveDocumentVecstoreResponse,
     SearchSimilarDocumentsRequest,
     SearchSimilarDocumentsResponse,
+    UniqueCodeDocumentResponse,
 )
 from app.services.embedding.document_embedding_service import DocumentEmbeddingService
 from app.services.rag.rag_agent import RAGAgent
@@ -105,6 +108,63 @@ async def delete_index_vecstore(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting index: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/delete_document",
+    status_code=status.HTTP_200_OK,
+    summary="Delete a single document from a vector store index",
+)
+async def delete_document(
+    request: DeleteDocumentVecstoreRequest,
+    service: EmbeddingServiceDep,
+) -> DeleteDocumentVecstoreResponse:
+    """Elimina un unico documento (todos sus chunks) sin afectar el resto del indice.
+
+    Complementa a ``/delete_index_vecstore`` (que borra la coleccion completa)
+    para el caso de uso que hoy usa Java via ``deleteEmbeddingDocument`` — ver
+    pendientes.md P-22. Se ejecuta sincrono porque, a diferencia de borrar una
+    coleccion entera, es una operacion acotada por filtro.
+    """
+    try:
+        result = service.delete_document(
+            index_name=request.index_vecstore,
+            id_document=request.id_document,
+        )
+        return DeleteDocumentVecstoreResponse(**result)
+    except Exception as exc:
+        logger.exception("error deleting document")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error deleting document: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/list_unique_code_documents",
+    status_code=status.HTTP_200_OK,
+    summary="List a lightweight summary of unique documents in a namespace",
+)
+async def list_unique_code_documents(
+    service: EmbeddingServiceDep,
+    namespace: Annotated[str, Body(..., description="Nombre del índice/colección")],
+) -> list[UniqueCodeDocumentResponse]:
+    """Devuelve un listado liviano (namespace/codigo/fileName/id/nombreDocumento).
+
+    Contrato pensado para ser un reemplazo directo de ``getListUniqueCodeDocuments``
+    en el micro Java origen — ver pendientes.md P-23. El body es un string JSON
+    plano (no un objeto) a propósito, para que Java pueda apuntar la URL a este
+    servicio sin tener que cambiar cómo arma el request.
+    """
+    try:
+        results = service.list_unique_code_documents(namespace=namespace)
+        return [UniqueCodeDocumentResponse(**item) for item in results]
+    except Exception as exc:
+        logger.exception("error listing unique code documents")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error listing unique code documents: {exc}",
         ) from exc
 
 

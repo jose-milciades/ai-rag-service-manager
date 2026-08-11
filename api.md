@@ -175,7 +175,7 @@ Mutación parcial, solo el estado.
 
 ## Embedding — `/api/v1/embedding`
 
-Archivo: `app/api/routes/embedding_controller.py`. Todos los endpoints son `POST` con body JSON, campos en `camelCase`. Motor subyacente: `RAGService` (`app/services/rag/rag_service.py`), con embeddings **hash-determinísticos**, no un modelo real (ver `pendientes.md` P-04), sobre un vector store **en memoria** (ver `pendientes.md` P-08).
+Archivo: `app/api/routes/embedding_controller.py`. Todos los endpoints son `POST` con body JSON, campos en `camelCase` (salvo `list_unique_code_documents`, ver abajo). Motor subyacente: `RAGService` (`app/services/rag/rag_service.py`), con embeddings reales (`sentence-transformers`, ver `pendientes.md` P-04) sobre `VECTOR_DB_TYPE=memory|milvus` (default en memoria; Milvus real disponible, ver `pendientes.md` P-08).
 
 ### `POST /api/v1/embedding/save_document_vecstore`
 
@@ -187,13 +187,13 @@ Indexa un documento (texto extraído + chunking) en una colección vectorial.
 |---|---|---|---|
 | `fileName` | `string` | sí | usado para inferir extensión/tipo de extracción |
 | `base64` | `string \| null` | no | contenido del archivo en base64 |
-| `idDocument` | `int` | sí | |
+| `idDocument` | `string` | sí | ID del documento; en el micro Java origen es el mismo valor que `uniqueCode`, no un ID numérico separado (ver `pendientes.md` P-20) |
 | `indexVecstore` | `string` | sí | nombre de colección destino |
 | `uniqueCode` | `string` | sí | código lógico del documento (para agrupar chunks) |
 | `hasDocumentBase64` | `bool` | no (default `true`) | si `true`, se espera `base64` |
 | `urlDownloadFile` | `string \| null` | no | alternativa a `base64`; **validado contra SSRF desde P-01** |
 | `bucket` | `string \| null` | no | alternativa a `base64`/URL: descarga desde GCS |
-| `listParameters` | `array<object>` | no | metadata adicional; se aplana a un dict |
+| `listParameters` | `array<object>` | no | metadata adicional; se aplana a un dict. Cada item acepta `{"key": ..., "value": ...}` **o** `{"code": ..., "value": ...}` (esta segunda forma es la que manda el micro Java origen vía `ParametersDTO`, ver `pendientes.md` P-21); cualquier otra forma se mezcla tal cual en la metadata |
 
 Fuente del contenido, en orden de precedencia: `base64` (si `hasDocumentBase64=true`) → `urlDownloadFile` → `bucket`. Si ninguno se provee, `500` (`ValueError: No document source was provided`).
 
@@ -220,6 +220,49 @@ Elimina una colección completa. **Se ejecuta como `BackgroundTask`** — la res
 ```json
 { "mensaje": "Index deletion started: soporte-interno", "codigo": 200 }
 ```
+
+### `POST /api/v1/embedding/delete_document`
+
+Elimina un único documento (todos sus chunks, filtrando por `idDocument`) sin afectar el resto de la colección. A diferencia de `delete_index_vecstore`, se ejecuta **síncrono** — la respuesta ya refleja el borrado. Agregado para cubrir `pendientes.md` P-22 (Java lo usa vía `deleteEmbeddingDocument`).
+
+**Body** — `DeleteDocumentVecstoreRequest`: `{ "indexVecstore": "string", "idDocument": "string" }`
+
+**Respuesta 200** — `DeleteDocumentVecstoreResponse`
+
+```json
+{
+  "success": true,
+  "message": "Document 'doc-a-001' deleted from index 'soporte-interno'",
+  "indexName": "soporte-interno",
+  "idDocument": "doc-a-001",
+  "deletedCount": 3
+}
+```
+
+### `POST /api/v1/embedding/list_unique_code_documents`
+
+Listado liviano (5 campos) de documentos únicos de una colección, pensado como reemplazo directo del contrato histórico `getListUniqueCodeDocuments` del micro Java origen (ver `pendientes.md` P-23). Complementa a `list_documents`, que ya cubre el mismo caso de uso con una forma de request/response más rica.
+
+**Diferencias deliberadas con el resto de `embedding`:**
+
+- El **body es un string JSON plano**, no un objeto: `"soporte-interno"` (no `{ "namespace": "soporte-interno" }`). Así el micro Java origen puede apuntar la URL a este servicio sin cambiar cómo arma el request (hoy manda el namespace como `HttpEntity<String>`).
+- La **respuesta es un array JSON plano** (`Metadata[]`), no un objeto envolvente con `success`/`message`.
+
+**Respuesta 200** — `UniqueCodeDocumentResponse[]`
+
+```json
+[
+  {
+    "namespace": "soporte-interno",
+    "codigo": "doc-a-001",
+    "fileName": "doc-a.txt",
+    "id": "e1ff38a7-ca13-4dce-a104-bf38b76605fb",
+    "nombreDocumento": "doc-a.txt"
+  }
+]
+```
+
+`nombreDocumento` hoy siempre repite el valor de `fileName` — no existe en la metadata actual un concepto de "nombre de documento" distinto del nombre físico del archivo.
 
 ### `POST /api/v1/embedding/list_documents`
 
@@ -289,44 +332,52 @@ Recupera contexto relevante y lo devuelve junto con una respuesta placeholder. *
 
 ## Storage — `/api/v1/storage`
 
-Archivo: `app/api/routes/storage_controller.py`. **No documentado en el README hasta esta revisión** (ver `pendientes.md` P-03). Replica la superficie pública de un microservicio Java de storage; parte de su lógica de negocio original (vectorización automática, consolidación de chunks) quedó fuera de esta migración — ver `pendientes.md` P-10 y P-11.
+Archivo: `app/api/routes/storage_controller.py`. **No documentado en el README hasta la revisión que lo detectó** (ver `pendientes.md` P-03). Replica la superficie pública de un microservicio Java de storage. Desde P-10/P-11, un upload exitoso puede disparar vectorización en background — ver la nota de cada endpoint y `pendientes.md` P-10/P-11/P-25.
 
 ### `POST /api/v1/storage/upload`
 
-`multipart/form-data`. Sube un archivo a un bucket privado de GCS.
+`multipart/form-data`. Sube un archivo a un bucket privado de GCS y, opcionalmente, dispara vectorización en background.
 
-| Campo (form) | Tipo | Requerido |
-|---|---|---|
-| `file` | binario | sí |
-| `name` | `string` | sí (nombre/clave de almacenamiento) |
-| `bucket` | `string` | no (usa `storage_default_bucket_name` si se omite) |
-| `projectId` | `string` | no |
-| `codeTypeDocument` | `string` | no |
-| `uploadContentBucket` | `bool` | no |
+| Campo (form) | Tipo | Requerido | Notas |
+|---|---|---|---|
+| `file` | binario | sí | |
+| `name` | `string` | sí | nombre/clave de almacenamiento en GCS |
+| `bucket` | `string` | no | usa `storage_default_bucket_name` si se omite |
+| `projectId` | `string` | no | si llega, determina la colección vectorial (ver abajo) |
+| `codeTypeDocument` | `string` | no | viaja como metadata del vector, no como nombre de colección |
+| `uploadContentBucket` | `bool` | no | `true` = disparar vectorización tras el upload (junto con `uniqueCode`) |
+| `uniqueCode` | `string` | no* | *requerido para que se dispare vectorización; sin él, `uploadContentBucket=true` no hace nada |
+| `idDocument` | `string` | no | si se omite, se usa el mismo valor que `uniqueCode` (igual que en el micro Java origen) |
 
-**Respuesta 200** — `UploadFileResponse`: `{ "success": true }`
+**Respuesta 200** — `UploadFileResponse`: `{ "success": true }` — refleja solo el resultado del upload a GCS; la vectorización (si se disparó) corre en background y no bloquea ni se refleja en esta respuesta (best-effort, sin callback — ver `integracion-java-storage.md` sección 2 sobre por qué no hace falta).
 
-> Nota: `projectId`, `codeTypeDocument`, `uploadContentBucket` se reciben pero hoy no disparan ningún efecto lateral de vectorización (P-10).
+**Colección vectorial resuelta** (`StorageService._resolve_vectorization_index`, replica la convención real del micro Java origen): si llega `projectId`, la colección es `project_{projectId}` (guiones se normalizan a `_`, Milvus no acepta guiones en nombres de colección — ver P-25); si no, cae a `codeTypeDocument`; si tampoco llega, usa `rag_default_collection_name`.
 
 ### `POST /api/v1/storage/chunk`
 
-`multipart/form-data`. Campos declarados con `Form()` explícito (alineado en `pendientes.md` P-16; antes se leían manualmente desde form/query indistintamente, y no aparecían en `/docs`). Persiste cada parte en disco local bajo `storage_chunk_upload_temp_dir`.
+`multipart/form-data`. Persiste cada parte en disco local bajo `storage_chunk_upload_temp_dir`. Cuando la parte recibida completa `totalChunks`, consolida automáticamente: arma el archivo final, lo sube a GCS, limpia el directorio temporal y (igual que `/upload`) puede disparar vectorización en background.
 
 | Campo (form) | Tipo | Requerido | Notas |
 |---|---|---|---|
 | `file` | binario | sí | |
 | `uploadId` | `string` | sí | agrupa las partes de una misma subida |
-| `chunkIndex` | `int` | sí | índice de la parte |
+| `chunkIndex` | `int` | sí | índice de la parte (0-based) |
 | `totalChunks` | `int` | sí | total esperado de partes |
 | `fileName` | `string` | sí | |
 | `name` | `string` | sí | |
 | `bucket` | `string` | sí | |
-| `projectId` | `string` | sí | |
+| `projectId` | `string` | sí | también determina la colección vectorial, igual que en `/upload` |
 | `idArea` | `string` | no | |
+| `codeTypeDocument` | `string` | no | mismo rol que en `/upload` |
+| `uploadContentBucket` | `bool` | no | mismo rol que en `/upload` — se evalúa recién en el chunk que completa la subida |
+| `uniqueCode` | `string` | no | mismo rol que en `/upload` |
+| `idDocument` | `string` | no | mismo rol que en `/upload` |
 
-Campo faltante o `chunkIndex`/`totalChunks` no numérico: `422` (validación automática de FastAPI/Pydantic; antes un valor no numérico producía un `500` sin manejar).
+Campo faltante o `chunkIndex`/`totalChunks` no numérico: `422` (validación automática de FastAPI/Pydantic).
 
-**Respuesta:** `200` con cuerpo vacío. **No implementa consolidación final** de las partes (P-11) — solo persiste `{chunkIndex}.part`, un `metadata.properties` y un archivo índice `{name}.upload` por subida.
+**Respuesta 200** — `ChunkUploadResponse`: `{ "consolidated": bool, "success": bool }`. `consolidated=false` en cada parte intermedia (`success` siempre `true` en ese caso — solo indica que la parte se guardó). En la parte que completa la subida, `consolidated=true` y `success` refleja si la subida del archivo consolidado a GCS tuvo éxito.
+
+> Limitación conocida (P-11): si la última parte se reintenta después de una consolidación ya exitosa, queda un directorio temporal residual con una sola parte huérfana — no rompe nada, pero no se autolimpia.
 
 > Nota de compatibilidad: la versión anterior de este endpoint también aceptaba estos valores como query params. Se eliminó ese soporte al fijar el contrato en P-16 porque no había evidencia de que el cliente real lo usara (los demás endpoints de storage nunca lo soportaron); si algún consumidor dependía de enviarlos por query, hay que restaurarlo explícitamente.
 
@@ -392,6 +443,8 @@ Requiere que `STORAGE_PUBLIC_BUCKET_NAME` esté configurado (ver `pendientes.md`
 | DELETE | `/api/v1/rag-services/{service_id}` | `rag_services_controller.py` | rag-services |
 | POST | `/api/v1/embedding/save_document_vecstore` | `embedding_controller.py` | embedding |
 | POST | `/api/v1/embedding/delete_index_vecstore` | `embedding_controller.py` | embedding |
+| POST | `/api/v1/embedding/delete_document` | `embedding_controller.py` | embedding |
+| POST | `/api/v1/embedding/list_unique_code_documents` | `embedding_controller.py` | embedding |
 | POST | `/api/v1/embedding/list_documents` | `embedding_controller.py` | embedding |
 | POST | `/api/v1/embedding/get_embeddings_by_unique_code` | `embedding_controller.py` | embedding |
 | POST | `/api/v1/embedding/search_similar_documents` | `embedding_controller.py` | embedding |

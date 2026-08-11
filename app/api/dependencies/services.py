@@ -48,17 +48,22 @@ def get_storage_client() -> StorageClient:
 
 
 @lru_cache
-def get_storage_service() -> StorageService:
-    return StorageService(config=get_storage_config(), storage_client=get_storage_client())
-
-
-@lru_cache
 def get_document_embedding_service() -> DocumentEmbeddingService:
     return DocumentEmbeddingService(
         settings=get_settings(),
         storage_client=get_storage_client(),
         vector_store_manager=get_vector_store_manager(),
         embedding_provider=get_embedding_provider(),
+    )
+
+
+@lru_cache
+def get_storage_service() -> StorageService:
+    return StorageService(
+        config=get_storage_config(),
+        storage_client=get_storage_client(),
+        document_embedding_service=get_document_embedding_service(),
+        settings=get_settings(),
     )
 
 

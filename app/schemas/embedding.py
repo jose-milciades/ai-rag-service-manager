@@ -13,7 +13,10 @@ class SaveDocumentVecstoreRequest(BaseModel):
 
     file_name: str = Field(..., description="Nombre del archivo")
     base64: str | None = Field(default=None, description="Contenido del archivo en base64")
-    id_document: int = Field(..., description="ID del documento")
+    id_document: str = Field(
+        ...,
+        description="ID del documento (string: en el micro Java origen es el mismo valor que unique_code, no un ID numérico separado)",
+    )
     index_vecstore: str = Field(..., description=INDEX_VECSTORE_DESCRIPTION)
     unique_code: str = Field(..., description="Código único del documento")
     has_document_base64: bool = Field(True, description="Si el documento viene en base64")
@@ -28,6 +31,16 @@ class DeleteIndexVecstoreRequest(BaseModel):
     model_config = get_camel_case_config()
 
     index_vecstore: str = Field(..., description="Nombre del índice/colección a eliminar")
+
+
+class DeleteDocumentVecstoreRequest(BaseModel):
+    model_config = get_camel_case_config()
+
+    index_vecstore: str = Field(..., description=INDEX_VECSTORE_DESCRIPTION)
+    id_document: str = Field(
+        ...,
+        description="ID del documento a eliminar (mismo valor que unique_code en el micro Java origen)",
+    )
 
 
 class ListDocumentsRequest(BaseModel):
@@ -97,6 +110,28 @@ class DeleteIndexVecstoreResponse(BaseModel):
     success: bool
     message: str
     index_name: str
+
+
+class DeleteDocumentVecstoreResponse(BaseModel):
+    model_config = get_camel_case_config()
+
+    success: bool
+    message: str
+    index_name: str
+    id_document: str
+    deleted_count: int
+
+
+class UniqueCodeDocumentResponse(BaseModel):
+    """Forma liviana equivalente a ``Metadata`` en el micro Java origen."""
+
+    model_config = get_camel_case_config()
+
+    namespace: str
+    codigo: str
+    file_name: str
+    id: str
+    nombre_documento: str
 
 
 class ListDocumentsResponse(BaseModel):

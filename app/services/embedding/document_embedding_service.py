@@ -56,7 +56,7 @@ class DocumentEmbeddingService:
         self,
         file_name: str,
         base64_content: str | None,
-        id_document: int,
+        id_document: str,
         index_name: str,
         unique_code: str,
         url_download_file: str | None = None,
@@ -107,6 +107,50 @@ class DocumentEmbeddingService:
             "message": f"Index '{index_name}' deleted successfully",
             "index_name": index_name,
         }
+
+    def delete_document(self, index_name: str, id_document: str) -> dict[str, Any]:
+        """Elimina un unico documento (todos sus chunks) sin afectar el resto del indice."""
+        rag_service = self._get_rag_service(index_name)
+        deleted_count = rag_service.delete_records({"id_document": id_document})
+        return {
+            "success": True,
+            "message": f"Document '{id_document}' deleted from index '{index_name}'",
+            "index_name": index_name,
+            "id_document": id_document,
+            "deleted_count": deleted_count,
+        }
+
+    def list_unique_code_documents(self, namespace: str) -> list[dict[str, Any]]:
+        """Lista un resumen liviano (codigo/nombre de archivo) de documentos unicos.
+
+        Forma de salida pensada para el contrato historico que Java espera de
+        ``getListUniqueCodeDocuments`` (``List<Metadata>`` con
+        namespace/codigo/fileName/id/nombreDocumento) -- ver pendientes.md P-23.
+        """
+        rag_service = self._get_rag_service(namespace)
+        records = self._vector_store_manager.list_records(
+            rag_service.collection_name, limit=self._settings.rag_unique_code_list_limit
+        )
+
+        seen_codes: set[str] = set()
+        documents: list[dict[str, Any]] = []
+        for record in records:
+            payload = record["payload"]
+            code = str(payload.get("unique_code") or payload.get("id_document") or record["id"])
+            if code in seen_codes:
+                continue
+            seen_codes.add(code)
+            file_name = payload.get("file_name", "")
+            documents.append(
+                {
+                    "namespace": namespace,
+                    "codigo": code,
+                    "file_name": file_name,
+                    "id": str(record["id"]),
+                    "nombre_documento": file_name,
+                }
+            )
+        return documents
 
     def list_documents_by_index(
         self,
@@ -224,11 +268,21 @@ class DocumentEmbeddingService:
 
     @staticmethod
     def _normalize_parameters(list_parameters: list[dict[str, Any]]) -> dict[str, Any]:
-        """Normaliza metadata arbitraria a un unico diccionario plano."""
+        """Normaliza metadata arbitraria a un unico diccionario plano.
+
+        Acepta dos formas para cada entrada: ``{"key": ..., "value": ...}`` y
+        ``{"code": ..., "value": ...}`` (esta ultima es la que manda el micro
+        Java origen via ``ParametersDTO``, ver pendientes.md P-21). Sin este
+        alias, entradas tipo ``{"code": "VECTOR_CHUNK_SIZE", "value": "1000"}``
+        caian al fallback generico y se pisaban entre si bajo las mismas
+        claves literales "code"/"value".
+        """
         metadata: dict[str, Any] = {}
         for item in list_parameters:
             if "key" in item and "value" in item:
                 metadata[str(item["key"])] = item["value"]
+            elif "code" in item and "value" in item:
+                metadata[str(item["code"])] = item["value"]
             else:
                 metadata.update(item)
         return metadata

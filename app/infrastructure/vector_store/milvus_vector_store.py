@@ -182,5 +182,23 @@ class MilvusVectorStore(VectorStoreInterface):
         if client.has_collection(collection_name):
             client.drop_collection(collection_name)
 
+    def delete_records(self, collection_name: str, filter_conditions: dict[str, Any]) -> int:
+        """Elimina registros que cumplan el filtro indicado; retorna cuantos se borraron."""
+        client = self._get_client()
+        if not client.has_collection(collection_name):
+            return 0
+        result = client.delete(
+            collection_name=collection_name,
+            filter=_build_filter_expression(filter_conditions),
+        )
+        # Igual que en insert_vectors: sin flush, el borrado no es visible de
+        # inmediato para queries subsiguientes (ver comentario de insert_vectors).
+        client.flush(collection_name)
+        if isinstance(result, dict):
+            return int(result.get("delete_count", 0))
+        if isinstance(result, list):
+            return len(result)
+        return 0
+
     def collection_exists(self, collection_name: str) -> bool:
         return self._get_client().has_collection(collection_name)

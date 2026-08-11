@@ -23,8 +23,8 @@ Cómo usarlo:
 | P-07 | Cero tests pese a estar configurado en `pyproject.toml` | Media | Pendiente |
 | P-08 | Vector store real (Milvus) no implementado | Baja | Resuelto |
 | P-09 | `InMemoryRagServiceRepository` sin persistencia real | Baja | Pendiente |
-| P-10 | `storage-upload-vectorization` sin integrar (marcado en código) | Baja | Pendiente |
-| P-11 | `storage-chunk-consolidation` sin integrar (marcado en código) | Baja | Pendiente |
+| P-10 | `storage-upload-vectorization` sin integrar (marcado en código) | Baja | Resuelto |
+| P-11 | `storage-chunk-consolidation` sin integrar (marcado en código) | Baja | Resuelto |
 | P-12 | Acoplamiento import-time con Vault en `app/schemas/embedding.py` | Baja | Resuelto |
 | P-13 | CORS abierto (`*`) + `allow_credentials` sin autenticación | Baja | Resuelto (parcial) |
 | P-14 | `/health/ready` nunca refleja fallas reales de dependencias | Baja | Resuelto |
@@ -33,6 +33,13 @@ Cómo usarlo:
 | P-17 | `Settings` no carga `.env` automáticamente pese a lo que dice el README | Baja | Resuelto |
 | P-18 | Adopción del estándar corporativo de calidad/seguridad (CI/CD, mypy, Bandit, pip-audit, Gitleaks, Trivy, coverage) | Media | Resuelto (parcial) |
 | P-19 | Imagen Docker creció ~1.6GB por embeddings locales (torch + sentence-transformers + pymilvus) | Baja | Pendiente |
+| P-20 | `id_document` incompatible: Java manda `String` (=`uniqueCode`), Python exige `int` | Alta | Resuelto |
+| P-21 | `list_parameters` incompatible: Java manda `{code,value}`, Python solo reconoce `{key,value}` (pérdida silenciosa de datos) | Alta | Resuelto |
+| P-22 | Falta endpoint para borrar un documento individual del índice (Java lo usa hoy vía `deleteEmbeddingDocument`) | Media | Resuelto |
+| P-23 | Falta endpoint liviano de listado por namespace equivalente a `getListUniqueCodeDocuments` de Java | Baja | Resuelto |
+| P-24 | Migrar `edi-ai-proyectos-backend` (Java) para consumir `/storage/*` y `/embedding/*` de `ai-rag-service-manager` en vez de GCS local + `analysis-ai-service` | Media | Resuelto (parcial) |
+| P-25 | Nombres de colección con caracteres inválidos para Milvus (ej. `project-42`) no se sanitizaban | Alta | Resuelto |
+| P-26 | Borrado de registros en Milvus (`delete_records`) no era visible de inmediato para queries subsiguientes (faltaba `flush`) | Media | Resuelto |
 
 ---
 
@@ -139,19 +146,25 @@ Cómo usarlo:
 
 ### P-10 — `storage-upload-vectorization` sin integrar
 
-- **Estado:** Pendiente
-- **Ubicación:** `app/services/storage_service.py` (`upload_file`), marcado explícitamente en código como `PENDIENTE_INTEGRACION`.
-- **Descripción:** En el micro Java origen, un upload exitoso podía disparar vectorización automática vía `ParameterCommonService`, `VectorStoreService`, `DocumentCommonService`. Esa continuación no se migró.
-- **Impacto:** El upload conserva la API pública pero no ejecuta efectos laterales de vectorización ni actualización de estado documental.
-- **Acción sugerida:** decidir si se replica ese flujo o si vectorización queda como paso explícito vía `/embedding/save_document_vecstore` (enfoque actual, más simple). **Con embeddings/Milvus reales (P-04/P-08) esta decisión ya no está bloqueada técnicamente** — antes no había vectorización real que disparar; ahora es una decisión de alcance de producto, no una limitación técnica.
+- **Estado:** Resuelto
+- **Detectado:** 2026-08-10
+- **Resuelto el:** 2026-08-11
+- **Ubicación:** `app/services/storage_service.py` (`upload_file`, `VectorizationTrigger`, `_resolve_vectorization_index`, `_vectorize_uploaded_file`); `app/api/routes/storage_controller.py` (`_vectorization_trigger_form`); `app/schemas/storage.py`.
+- **Descripción:** En el micro Java origen (`edi-ai-proyectos-backend`, `StorageManager.uploadFile`), un upload exitoso dispara vectorización automática de forma condicional: solo si `codeTypeDocument` está presente y pertenece a una lista configurable de tipos vectorizables (`ParameterCommonService`, parámetro `is_vectorizable`). Esa continuación no se migró a `ai-rag-service-manager`.
+- **Análisis con el código Java real** (ver `integracion-java-storage.md`): el trigger real de Java depende de un parámetro de BD fuera del alcance de este servicio; **no hace falta ningún callback HTTP de vuelta hacia Java** (Java ya resuelve su propio estado con la respuesta síncrona de `/embedding/save_document_vecstore` dentro de su propia tarea async); la colección vectorial real es `project-{idProject}` (una por proyecto), no `codeTypeDocument`.
+- **Solución aplicada:** `/storage/upload` acepta ahora `uniqueCode`, `idDocument` (opcionales) además de los campos ya existentes. Trigger: `uploadContentBucket=true` + `uniqueCode` presente (más simple que replicar la regla de negocio de Java, que vive en su propia BD). Colección: `project_{projectId}` si llega `projectId` (ver P-25 sobre el guión bajo), si no `codeTypeDocument`, si no el default global. Ejecución en `BackgroundTask` con `asyncio.to_thread` (no bloquea el event loop durante el cómputo de embeddings); `UploadFileResponse` no cambia — la vectorización es best-effort, sin callback, solo logueada. Los 5 campos nuevos (`codeTypeDocument`, `uploadContentBucket`, `uniqueCode`, `idDocument`, `background_tasks`) se agruparon en un dataclass `VectorizationTrigger` para no violar el límite de parámetros por función (regla Sonar S107); en el controller, `BackgroundTasks` se resuelve vía una sub-dependencia de FastAPI (`_vectorization_trigger_form`) por el mismo motivo.
+- **Verificación real (no simulada):** se levantó la app completa (`TestClient` + Milvus real en `localhost:19530` + modelo de embeddings real) mockeando solo `StorageClient.upload_bytes` (la única dependencia no disponible en este sandbox: credenciales GCS reales). `POST /storage/upload` con `uploadContentBucket=true`, `projectId=42`, `uniqueCode=TEST-P10-0001` devolvió `{"success": true}`; tras la respuesta, la colección `project_42` se creó en Milvus y el documento quedó indexado y recuperable vía `get_embeddings_by_unique_code`, con `code_type_document` correctamente presente en la metadata (no como nombre de colección).
 
 ### P-11 — `storage-chunk-consolidation` sin integrar
 
-- **Estado:** Pendiente
-- **Ubicación:** `app/services/storage_service.py` (`store_chunk`), marcado explícitamente en código como `PENDIENTE_INTEGRACION`.
-- **Descripción:** Los chunks subidos se persisten en disco local (`STORAGE_CHUNK_UPLOAD_TEMP_DIR`), pero no hay consolidación final (merge), subida a GCS del archivo ensamblado, ni limpieza transaccional post-commit.
-- **Impacto:** El endpoint recibe y guarda partes, pero el circuito de ensamblado y publicación del archivo final no está cerrado.
-- **Acción sugerida:** implementar consolidación (merge de `.part` por `uploadId`, subida final, limpieza) cuando se necesite el flujo de upload por chunks completo.
+- **Estado:** Resuelto
+- **Detectado:** 2026-08-10
+- **Resuelto el:** 2026-08-11
+- **Ubicación:** `app/services/storage_service.py` (`store_chunk`, `_collect_ordered_parts`, `_consolidate_chunks`, `_cleanup_upload`); `app/schemas/storage.py` (`ChunkUploadResponse`).
+- **Descripción:** Los chunks subidos se persistían en disco local (`STORAGE_CHUNK_UPLOAD_TEMP_DIR`), pero no había consolidación final (merge), subida a GCS del archivo ensamblado, ni limpieza post-commit.
+- **Solución aplicada:** consolidación automática, en la misma request que recibe la última parte (no en background — el merge en disco es rápido, a diferencia de la vectorización): cuando el conteo de `.part` en disco iguala `totalChunks`, se concatenan en orden numérico, se sube el archivo resultante a GCS (reusando `StorageClient.upload_bytes`) y se limpia el directorio temporal + archivo índice (limpieza best-effort, no tumba una consolidación ya exitosa si falla). `/storage/chunk` ganó los mismos campos opcionales que `/storage/upload` (`codeTypeDocument`, `uploadContentBucket`, `uniqueCode`, `idDocument`) para poder disparar la misma vectorización una vez consolidado — mismo `VectorizationTrigger`/`_resolve_vectorization_index` reusados de P-10. El endpoint pasó de devolver `200` con cuerpo vacío a devolver `ChunkUploadResponse {consolidated, success}` — cambio de contrato documentado en `api.md` y `integracion-java-storage.md`.
+- **Limitación conocida, aceptada:** si la última parte se reintenta después de una consolidación ya exitosa, queda un directorio residual con una parte huérfana — no rompe nada, no se autolimpia. No se construyó un mecanismo de idempotencia distribuida completo para esto.
+- **Verificación real:** mismo setup que P-10 (Milvus real, GCS mockeado). Se subieron 3 partes de un archivo fragmentado vía `POST /storage/chunk`: las dos primeras devolvieron `{"consolidated": false, "success": true}`, la última `{"consolidated": true, "success": true}`. Tras la última parte, el directorio temporal y el archivo índice ya no existían (limpieza confirmada), y el documento quedó indexado en Milvus (`project_77`) con la metadata correcta.
 
 ### P-12 — Acoplamiento import-time con Vault en `app/schemas/embedding.py`
 
@@ -302,3 +315,92 @@ Cómo usarlo:
 - **Mitigaciones ya aplicadas:** build-time pre-download del modelo default + `HF_HUB_OFFLINE=1` en runtime (evita descargas/verificaciones de red en cada arranque, ver Dockerfile); `torch` fijado a CPU-only (evita ~4GB de librerías CUDA innecesarias).
 - **Acción sugerida:** si el tamaño de imagen se vuelve un problema operativo (tiempos de deploy, costo de registry, cold-start en autoscaling), evaluar alternativas más livianas: (a) un proveedor de embeddings por API (OpenAI, Cohere, Voyage — quita `torch`/`sentence-transformers` del todo, cambia el trade-off a latencia de red + costo por request); (b) modelos ONNX-only sin el runtime completo de `sentence-transformers`/`transformers` (más liviano pero más trabajo de integración); (c) separar el servicio de embeddings en un microservicio aparte si varios servicios lo van a reutilizar. Ninguna de estas se implementó — la decisión actual (local, CPU, `sentence-transformers`) fue la que pidió explícitamente el usuario.
 - **Nota de auditoría (relacionado con P-18/pip-audit):** `pip-audit` no puede verificar `torch` porque se resuelve desde el índice CPU-only de PyTorch, no desde PyPI estándar (`torch==2.13.0+cpu` no tiene match en la base de datos de vulnerabilidades por ese sufijo de version). Es un "skip", no una vulnerabilidad confirmada ni descartada — si se necesita auditoría real de `torch`, hay que verificarlo manualmente contra los avisos de seguridad de PyTorch.
+
+---
+
+## Pendientes de integración con `edi-ai-proyectos-backend` (Java)
+
+Detectados el 2026-08-11 al analizar el código real de `edi-ai-proyectos-backend` (`StorageManager.java`, `VectorStoreServiceImpl.java`, `VectorStoreMapper.java`, `SaveFileVecstoreRequest.java`) para planear la migración de storage/vectorización de Java hacia `ai-rag-service-manager`. Detalle completo, con fragmentos de código y diagramas de flujo, en [`integracion-java-storage.md`](./integracion-java-storage.md).
+
+### P-20 — `id_document` incompatible: Java manda `String`, Python exige `int`
+
+- **Estado:** Resuelto
+- **Detectado:** 2026-08-11
+- **Resuelto el:** 2026-08-11
+- **Ubicación:** `app/schemas/embedding.py` (`SaveDocumentVecstoreRequest.id_document`); `app/services/embedding/document_embedding_service.py` (`save_document_to_vecstore`); `api.md`. Java: `SaveFileVecstoreRequest.idDocument` (`String`, seteado por `VectorStoreMapper` al mismo valor que `uniqueCode`, no a un ID numérico real).
+- **Descripción:** Java no tiene un `idDocument` numérico separado — usa el mismo string que `uniqueCode` (`uploadFileRequest.name()`). El schema Python exigía `id_document: int`, sin default.
+- **Impacto:** Era bloqueante real para la integración: si Java mandaba su `idDocument` string tal cual, `ai-rag-service-manager` respondía `422` antes de indexar nada.
+- **Solución aplicada:** `id_document` cambiado a `str` en `SaveDocumentVecstoreRequest` (`app/schemas/embedding.py`) y en la firma de `DocumentEmbeddingService.save_document_to_vecstore` — el método solo usaba `id_document` como valor de metadata, sin aritmética, así que el cambio de tipo no tocó ninguna otra lógica. Actualizado también `api.md`.
+- **Verificación real:** se construyó un `SaveDocumentVecstoreRequest` con el payload exacto que arma `VectorStoreMapper` en Java (`idDocument="DOC-2026-0001"`, igual a `uniqueCode`) — valida correctamente y `id_document` queda como `str`.
+
+### P-21 — `list_parameters` incompatible: Java manda `{code,value}`, Python solo reconoce `{key,value}`
+
+- **Estado:** Resuelto
+- **Detectado:** 2026-08-11
+- **Resuelto el:** 2026-08-11
+- **Ubicación:** `app/services/embedding/document_embedding_service.py` (`_normalize_parameters`); `api.md`. Java: `ParametersDTO` (campos `code`/`value`, confirmado leyendo la clase — no `key`/`value`).
+- **Descripción:** `_normalize_parameters` solo reconocía el patrón `{"key": ..., "value": ...}`; cualquier otra forma caía al `else: metadata.update(item)`. Como Java manda `{"code": "VECTOR_CHUNK_SIZE", "value": "1000"}` y luego `{"code": "VECTOR_CHUNK_OVERLAP", "value": "200"}`, ambas entradas se aplanaban bajo las mismas claves literales `"code"`/`"value"` — la segunda pisaba a la primera silenciosamente.
+- **Impacto:** No era un error visible (no lanzaba excepción) — era **pérdida silenciosa de datos**. Los parámetros de chunking que Java mandaba no llegaban a la metadata del vector tal como se esperaba.
+- **Solución aplicada:** se agregó una rama `elif "code" in item and "value" in item: metadata[str(item["code"])] = item["value"]` en `_normalize_parameters`, antes del fallback genérico — acepta `{code, value}` como alias de `{key, value}`, sin tocar el formato original ni requerir cambios en Java.
+- **Verificación real:** se llamó a `_normalize_parameters` con el payload exacto de `StorageManager` (`VECTOR_CHUNK_SIZE`/`VECTOR_CHUNK_OVERLAP` vía `{code, value}`) — resultado `{"VECTOR_CHUNK_SIZE": "1000", "VECTOR_CHUNK_OVERLAP": "200"}`, ambos parámetros distintos, sin pisarse. Se confirmó además que el formato original `{key, value}` sigue funcionando igual que antes (compatibilidad hacia atrás).
+
+### P-22 — Falta endpoint para borrar un documento individual del índice
+
+- **Estado:** Resuelto
+- **Detectado:** 2026-08-11
+- **Resuelto el:** 2026-08-11
+- **Ubicación:** `app/infrastructure/vector_store/vector_store_interface.py`/`vector_store_manager.py`/`milvus_vector_store.py` (`delete_records`), `app/services/rag/rag_service.py` (`RAGService.delete_records`), `app/services/embedding/document_embedding_service.py` (`delete_document`), `app/schemas/embedding.py` (`DeleteDocumentVecstoreRequest`/`Response`), `app/api/routes/embedding_controller.py` (`POST /embedding/delete_document`).
+- **Descripción:** `ai-rag-service-manager` solo podía borrar la colección completa (`/embedding/delete_index_vecstore`). Java tiene un caso de uso real de borrar un solo documento sin afectar el resto del índice (`VectorStoreService.deleteEmbeddingDocument(indexVecstore, idDocument)`).
+- **Solución aplicada:** se agregó `delete_records(collection_name, filter_conditions)` al contrato `VectorStoreInterface`, implementado en ambos backends (memoria: filtra y reconstruye la lista; Milvus: `MilvusClient.delete` con expresión de filtro, reutilizando `_build_filter_expression`, ya validado contra inyección de filtro). Se expuso un endpoint nuevo `POST /embedding/delete_document`, síncrono (a diferencia de `delete_index_vecstore`, que es `BackgroundTask` por ser potencialmente más costoso), que filtra por `id_document`. El `DeleteDocumentVecstoreRequest` (`{indexVecstore, idDocument}`) es **compatible byte a byte** con el `DeleteEmbeddingRequest` que Java ya arma hoy — no requiere cambiar cómo Java construye el request, solo repuntar la URL.
+- **Verificación real:** contra Milvus real (no en memoria): se indexaron dos documentos en una colección, se borró uno por `idDocument` (`deletedCount: 1`), se confirmó que el otro documento seguía intacto y que el borrado no afectaba el resto de la colección. Este mismo test destapó P-26 (ver abajo).
+- **Impacto:** Ya no bloquea repuntar `deleteEmbeddingDocument` en Java a `ai-rag-service-manager`.
+
+### P-23 — Falta endpoint liviano de listado por namespace
+
+- **Estado:** Resuelto
+- **Detectado:** 2026-08-11
+- **Resuelto el:** 2026-08-11
+- **Ubicación:** `app/services/embedding/document_embedding_service.py` (`list_unique_code_documents`), `app/schemas/embedding.py` (`UniqueCodeDocumentResponse`), `app/api/routes/embedding_controller.py` (`POST /embedding/list_unique_code_documents`), `app/core/config.py` (`rag_unique_code_list_limit`, default 10000).
+- **Descripción:** `/embedding/list_documents` ya cubría este caso de uso conceptualmente, pero con una forma de request/response distinta a la que espera Java (`VectorStoreService.getListUniqueCodeDocuments(namespace)` → `List<Metadata{namespace, codigo, fileName, id, nombreDocumento}>`, con el namespace mandado como string JSON plano, no un objeto).
+- **Solución aplicada:** se agregó un endpoint dedicado que replica el contrato exacto de Java: acepta un **body string JSON plano** (no un objeto envolvente) y devuelve un **array JSON plano** (no una respuesta envuelta con `success`/`message`) de objetos `{namespace, codigo, fileName, id, nombreDocumento}` — mismos nombres de campo que la clase `Metadata` de Java gracias al alias generator camelCase ya existente. Se optó deliberadamente por replicar la forma "rara" del contrato de Java (string plano en vez de objeto) para que el repunte en Java sea **solo un cambio de URL de configuración**, sin tocar cómo arma el request ni cómo deserializa la respuesta. `codigo`/`fileName` se completan con `unique_code`/`file_name` del payload (los únicos dos campos que el código Java real (`VectorStoreManager.getDocumentsByType`) efectivamente lee de `Metadata`); `nombreDocumento` repite `fileName` porque no existe hoy un concepto de "nombre de documento" separado del nombre físico del archivo; `id` usa el id del chunk/registro.
+- **Verificación real:** contra Milvus real, con dos documentos indexados en una colección, `POST /embedding/list_unique_code_documents` con body `"<nombre-coleccion>"` devolvió ambos, deduplicados por `unique_code`, con los 5 campos esperados y en camelCase.
+- **Impacto:** Ya no bloquea repuntar `getListUniqueCodeDocuments` en Java a `ai-rag-service-manager`.
+
+### P-26 — Borrado en Milvus no era visible de inmediato para queries subsiguientes
+
+- **Estado:** Resuelto
+- **Detectado:** 2026-08-11, verificando P-22 end-to-end contra Milvus real.
+- **Resuelto el:** 2026-08-11
+- **Ubicación:** `app/infrastructure/vector_store/milvus_vector_store.py` (`MilvusVectorStore.delete_records`).
+- **Descripción:** al implementar `delete_records`, la primera versión llamaba a `MilvusClient.delete(...)` (que respondía con `delete_count: 1`, aparentando éxito) pero una consulta inmediatamente después (`list_records`) seguía devolviendo el registro borrado. Con ~3 segundos de espera entre el borrado y la consulta, el registro sí desaparecía — el mismo patrón de eventual consistency por el que `insert_vectors` ya llama a `client.flush()` para que lo insertado sea buscable de inmediato, pero que no se había replicado para `delete`.
+- **Impacto:** Sin este fix, `POST /embedding/delete_document` reportaría éxito (`success: true`, `deletedCount: 1`) pero el documento seguiría apareciendo en búsquedas/listados inmediatamente después — inconsistencia silenciosa, análoga en severidad a P-21 (dato incorrecto sin excepción visible).
+- **Solución aplicada:** se agregó `client.flush(collection_name)` después de `client.delete(...)` en `MilvusVectorStore.delete_records`, igual que ya hace `insert_vectors`.
+- **Verificación real:** se repitió el test de P-22 sin ningún `sleep` entre el borrado y el listado subsiguiente — el documento borrado ya no aparecía.
+
+### P-24 — Migrar `edi-ai-proyectos-backend` (Java) para consumir `ai-rag-service-manager`
+
+- **Estado:** Resuelto (parcial)
+- **Detectado:** 2026-08-11
+- **Avance el:** 2026-08-11
+- **Ubicación:** `edi-ai-proyectos-backend`: `RagServiceConfigProperties` (nuevo), `RagServiceStorageClient` (nuevo), `StorageServiceImpl` (marcada `@Primary`), `VectorStoreServiceImpl` (repuntado, ya sin `OpenAiConfigProperties`), `application.yml`/`application-dev.yml`.
+- **Descripción:** Iniciativa de integración de más alto nivel que agrupa P-20 a P-23: Java subía archivos directo a GCS (sin pasar por `ai-rag-service-manager`) y vectorizaba contra un servicio distinto (`analysis-ai-service:7002`, contrato `/documents/*`).
+- **Lo que quedó activo (cambia comportamiento real):**
+  - Los cuatro métodos de vectorización de `VectorStoreServiceImpl` (`saveEmbeddingFile`, `deleteIndexVecstore`, `deleteEmbeddingDocument`, `getListUniqueCodeDocuments`) están repuntados a `app.rag-service.*` en vez de `app.openai.*`. Los últimos dos se cerraron el 2026-08-11 al resolver P-22/P-23 en `ai-rag-service-manager` — con esos endpoints ya disponibles, el repunte fue solo cambiar la URL de configuración, sin tocar cómo Java arma el request ni deserializa la respuesta (ver `integracion-java-storage.md` secciones 4 y 5.2). El campo `openaiConfig` (y su import) se eliminaron de la clase por quedar sin uso — verificado con `./gradlew compileJava`/`compileTestJava`/`assemble`.
+- **Lo que quedó implementado pero NO activo (decisión deliberada, no un olvido):**
+  - `RagServiceStorageClient` — nueva implementación de `StorageService` que llama a `/api/v1/storage/*` de `ai-rag-service-manager`, contrato completo (`uploadFile` con y sin `UploadFileRequest`, `getFile`, `getFileBytes`, `uploadPublicFile`). `StorageServiceImpl` (GCS directo) se marcó `@Primary` para seguir siendo el bean activo — cambiar `StorageManager` a inyectar el cliente nuevo (vía `@Qualifier`) es una decisión de corte aparte, no ejecutada aquí, porque implica credenciales/datos reales de storage y este microservicio Java no se pudo levantar ni probar end-to-end desde este entorno.
+- **Verificación real:** `./gradlew compileJava`, `compileTestJava` y `assemble` (build completo del jar) exitosos tras todos los cambios. No se pudo verificar en runtime (arrancar el contexto de Spring, hacer una llamada real) — limitación del entorno, no algo que quedó sin intentar por descuido.
+- **Impacto:** Ya no bloquea nada del lado `ai-rag-service-manager` (P-10/P-11/P-20/P-21/P-25 resueltos). Queda: confirmar el hostname real de `ai-rag-service-manager` en cada ambiente, probar en dev, y decidir cuándo cortar el storage al nuevo cliente.
+- **Hallazgos colaterales, reportados sin corregir (fuera de alcance de esta tarea):** el repo Java tiene un merge sin resolver en `src/main/resources/edward-creds.json` (no se tocó), y `application.yml`/`application-dev.yml` tienen secretos reales en texto plano versionados en git (client secret de Keycloak, password de email, token de Webex) — preexistente, no introducido por este cambio.
+- **Acción sugerida:** ver `integracion-java-storage.md` sección 7 para el checklist actualizado y el detalle completo de qué falta.
+
+### P-25 — Nombres de colección con caracteres inválidos para Milvus no se sanitizaban
+
+- **Estado:** Resuelto
+- **Detectado:** 2026-08-11, probando P-10 end-to-end contra Milvus real.
+- **Resuelto el:** 2026-08-11
+- **Ubicación:** `app/services/rag/rag_service.py` (`_resolve_collection_name`, nueva `_sanitize_collection_name`).
+- **Descripción:** Milvus solo acepta letras, números y guion bajo en nombres de colección (rechaza con `MilvusException code=1100` cualquier otro carácter, incluyendo guiones). `_resolve_collection_name` nunca validó ni saneó el nombre recibido — funcionaba con el backend en memoria (P-08, cualquier string servía de key de dict) pero nunca se probó contra Milvus real hasta ahora. La convención real del micro Java origen para nombres de colección es `project-{idProject}` (con guion) — exactamente el patrón que P-10 empezó a generar y que rompió contra Milvus real en la primera prueba end-to-end.
+- **Impacto:** Sin este fix, **cualquier** `index_vecstore`/colección con guiones, espacios, puntos u otro carácter no-ASCII-alfanumérico fallaba en cualquier operación (`create_collection`, `search`, `list_records`, etc.) con una excepción de Milvus no manejada — no solo el caso de P-10, sino cualquier llamada a `/embedding/*` con un `indexVecstore` que contuviera esos caracteres (por ejemplo, si Java llega a mandar `"project-42"` literal como `indexVecstore` en `/embedding/save_document_vecstore`).
+- **Solución aplicada:** `_sanitize_collection_name` en `RAGService` reemplaza cualquier carácter fuera de `[0-9a-zA-Z_]` por `_` (usando `\W` con `re.ASCII` para no dejar pasar letras unicode, que Python trata como "word chars" pero Milvus no acepta), y antepone `_` si el resultado empieza con dígito. Se aplica tanto al nombre de colección como al prefijo (`rag_collection_name_prefix`) antes de combinarlos. Es un fix central en `RAGService`, no solo en el código nuevo de P-10 — protege cualquier caller de `/embedding/*`, incluyendo la futura integración real de Java.
+- **Verificación real:** `_sanitize_collection_name('project-42')` → `'project_42'`; con espacios/puntos (`'mi coleccion.v2'`) → `'mi_coleccion_v2'`; empezando con dígito (`'42-cosas'`) → `'_42_cosas'`. Confirmado además indirectamente por las pruebas end-to-end de P-10/P-11 (colecciones `project_42`/`project_77` creadas y usadas correctamente en Milvus real).
+- **Nota para integración Java:** documentado en `integracion-java-storage.md` — el nombre de colección que Java construya como `"project-{id}"` va a llegar sanitizado a `"project_{id}"` en Milvus; no hace falta que Java cambie su convención, pero el nombre real en Milvus difiere ligeramente (guion → guion bajo) de lo que Java arma internamente.

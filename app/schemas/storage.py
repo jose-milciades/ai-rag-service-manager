@@ -9,6 +9,17 @@ class UploadFileResponse(BaseModel):
     success: bool = Field(...)
 
 
+class ChunkUploadResponse(BaseModel):
+    model_config = get_camel_case_config()
+
+    consolidated: bool = Field(
+        ..., description="true en el chunk que completa el upload y dispara la consolidacion"
+    )
+    success: bool = Field(
+        ..., description="Resultado de la consolidacion (siempre true si consolidated=false)"
+    )
+
+
 class UploadPublicFileResponse(BaseModel):
     model_config = get_camel_case_config()
 

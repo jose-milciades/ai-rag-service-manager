@@ -50,5 +50,13 @@ class VectorStoreInterface(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def delete_records(
+        self,
+        collection_name: str,
+        filter_conditions: dict[str, Any],
+    ) -> int:
+        raise NotImplementedError
+
+    @abstractmethod
     def collection_exists(self, collection_name: str) -> bool:
         raise NotImplementedError
