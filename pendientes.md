@@ -22,7 +22,7 @@ Cómo usarlo:
 | P-06 | `.env.example` ausente (contradice al README) | Media | Resuelto |
 | P-07 | Cero tests pese a estar configurado en `pyproject.toml` | Media | Pendiente |
 | P-08 | Vector store real (Milvus) no implementado | Baja | Resuelto |
-| P-09 | `InMemoryRagServiceRepository` sin persistencia real | Baja | Pendiente |
+| P-09 | `InMemoryRagServiceRepository` sin persistencia real | Baja | Resuelto |
 | P-10 | `storage-upload-vectorization` sin integrar (marcado en código) | Baja | Resuelto |
 | P-11 | `storage-chunk-consolidation` sin integrar (marcado en código) | Baja | Resuelto |
 | P-12 | Acoplamiento import-time con Vault en `app/schemas/embedding.py` | Baja | Resuelto |
@@ -40,6 +40,10 @@ Cómo usarlo:
 | P-24 | Migrar `edi-ai-proyectos-backend` (Java) para consumir `/storage/*` y `/embedding/*` de `ai-rag-service-manager` en vez de GCS local + `analysis-ai-service` | Media | Resuelto (parcial) |
 | P-25 | Nombres de colección con caracteres inválidos para Milvus (ej. `project-42`) no se sanitizaban | Alta | Resuelto |
 | P-26 | Borrado de registros en Milvus (`delete_records`) no era visible de inmediato para queries subsiguientes (faltaba `flush`) | Media | Resuelto |
+| P-27 | Embeddings solo soportaban `sentence-transformers` local; faltaba la API real de OpenAI (`text-embedding-3-large`, ya productiva en `edi-ai-analysis-ai`) | Media | Resuelto |
+| P-28 | Integrar `edi-ai-operator` con `ai-rag-service-manager`: tool nueva de búsqueda semántica para el agente + migrar el storage propio (GCS directo) al storage centralizado del RAG | Media | Resuelto (parcial) |
+| P-29 | `search_similar_documents` devolvía `results[].text_preview` en `snake_case`, inconsistente con el resto de la API (`camelCase`) | Baja | Resuelto |
+| P-30 | `RAG_OPENAI_EMBEDDING_DIMENSIONS=""` rompía el arranque con Vault (`int \| None` no acepta string vacío) | Media | Resuelto |
 
 ---
 
@@ -89,6 +93,7 @@ Cómo usarlo:
 - **Solución aplicada:** se agregó `EmbeddingProvider` (usa `pymilvus.model.dense.SentenceTransformerEmbeddingFunction`, que envuelve `sentence-transformers`) cargando el modelo indicado en `RAG_EMBEDDING_MODEL`/`RAG_EMBEDDING_DEVICE`/`RAG_NORMALIZE_EMBEDDINGS`. Es una instancia única (`@lru_cache` en `app/api/dependencies/services.py`, `get_embedding_provider()`) compartida entre todas las colecciones/instancias de `RAGService` — cargar el modelo es costoso, no se puede repetir por request. `RAGService` ya no calcula `_vector_size` fijo (era `128` hardcodeado); ahora usa `embedding_provider.dim` (384 para el modelo default).
 - **Verificación real:** se corrió un test end-to-end (embeddings reales + Milvus real, ver P-08) indexando 3 documentos de temas distintos (gatos, finanzas, Python) y consultando `"lenguajes de programacion"` — el resultado top-1 fue correctamente el documento de Python (score 0.589) muy por encima del de gatos (score 0.256), algo que el hashing anterior no podía lograr al no capturar significado semántico.
 - **Pendiente relacionado no resuelto aquí:** el modelo (`sentence-transformers/all-MiniLM-L6-v2`) es un default genérico, no validado contra datos/dominio propios de negocio — antes de confiar en la calidad de retrieval para un caso de uso real, evaluar el modelo con datos reales del dominio y comparar contra alternativas (BGE, modelos en español, etc.) si el default no rinde bien.
+- **Actualizado 2026-08-11 (ver P-27):** este modelo local ahora es solo una de dos opciones (`RAG_EMBEDDING_PROVIDER=local`); el default pasó a ser la API real de OpenAI (`text-embedding-3-large`, `RAG_EMBEDDING_PROVIDER=openai`), por continuidad con el modelo ya productivo en `edi-ai-analysis-ai`.
 - **Impacto en imagen Docker:** agrega `torch`+`sentence-transformers`+`pymilvus` como dependencias core — ver P-19.
 
 ### P-05 — No hay integración LLM real en `rag_query`
@@ -96,9 +101,9 @@ Cómo usarlo:
 - **Estado:** Pendiente
 - **Detectado:** 2026-08-10
 - **Ubicación:** `app/services/rag/rag_agent.py` (`answer_with_context`).
-- **Descripción:** `POST /api/v1/embedding/rag_query` siempre responde `answer: "LLM integration pending. Retrieved context returned."`. Los campos `llm_provider`/`chat_model` de `rag-services` no se usan en ningún punto del flujo de embedding/retrieval.
+- **Descripción:** `POST /api/v1/embedding/rag_query` siempre responde `answer: "LLM integration pending. Retrieved context returned."`.
 - **Impacto:** El endpoint no genera respuestas basadas en LLM, solo retorna contexto recuperado y fuentes.
-- **Acción sugerida:** conectar `RAGAgent` con un cliente LLM real, idealmente resolviendo el proveedor/modelo desde la definición de `rag-services` correspondiente (hoy desconectada del flujo, ver relación con P-04).
+- **Acción sugerida:** conectar `RAGAgent` con un cliente LLM real, con el proveedor/modelo resuelto desde `Settings` (env vars), igual que el resto de la configuración del servicio. **Actualizado 2026-08-11:** el catálogo `rag-services` que originalmente se pensó como fuente de ese proveedor/modelo se eliminó por no tener consumidor (ver P-09) — no depender de él en la solución de este pendiente.
 
 ### P-06 — `.env.example` ausente (contradice al README)
 
@@ -138,11 +143,15 @@ Cómo usarlo:
 
 ### P-09 — `InMemoryRagServiceRepository` sin persistencia real
 
-- **Estado:** Pendiente
-- **Ubicación:** `app/infrastructure/repositories/in_memory_rag_service_repository.py`.
-- **Descripción:** Las definiciones de `rag-services` viven solo en memoria del proceso.
-- **Impacto:** Se pierden en cada restart/deploy y no se comparten entre réplicas si el servicio escala horizontalmente.
-- **Acción sugerida:** backlog de producto (requiere elegir motor de persistencia). **No relacionado con la integración de Milvus (P-08)**: este pendiente es sobre el almacén de las *definiciones* de `rag-services` (nombre, proveedor LLM, etc.), un dominio distinto al de los vectores/documentos que sí ahora persisten en Milvus.
+- **Estado:** Resuelto
+- **Detectado:** 2026-08-10
+- **Resuelto el:** 2026-08-11
+- **Ubicación (eliminada):** `app/domain/entities/rag_service.py`, `app/domain/repositories/rag_service_repository.py`, `app/infrastructure/repositories/in_memory_rag_service_repository.py`, `app/services/rag_service.py`, `app/schemas/rag_service.py`, `app/api/routes/rag_services_controller.py`, y su wiring en `app/api/router_controller.py`/`app/api/dependencies/services.py`.
+- **Descripción:** Las definiciones de `rag-services` (CRUD completo: nombre, proveedor LLM, modelo de chat/embeddings, backend vectorial, estado) vivían solo en memoria del proceso, sin persistencia real.
+- **Análisis antes de decidir cómo resolverlo:** se verificó si algo consumía este catálogo. Resultado: **nada lo consume**. Ni el flujo real de embeddings dentro de este mismo servicio (`DocumentEmbeddingService`/`RAGService`/`RAGAgent` reciben `indexVecstore`/modelo/backend directo en cada request o desde `Settings`, nunca desde un `RagService` guardado) ni `edi-ai-proyectos-backend` (grep completo del repo Java: cero referencias a `/rag-services*`). Era un CRUD administrativo bien capeado (dominio/repositorio/servicio/controller separados correctamente) pero desconectado del resto del sistema — scaffolding para un futuro modelo multi-configuración que nunca se conectó a lógica real.
+- **Decisión:** en vez de elegir un motor de persistencia para código sin consumidor (lo que además habría requerido revisar la exclusión intencional de ORM/SQLAlchemy y Alembic del README), se **eliminó el feature completo** por no tener uso. `app/domain/` quedó vacío y se eliminó también (ya no queda capa de dominio en el servicio — se actualizó la sección "Arquitectura" del README en consecuencia). El puerto `RagServiceRepository` seguía siendo la abstracción correcta si este catálogo vuelve a ser necesario; queda en el historial de git, no en el código activo.
+- **Verificación real:** `ruff`/`mypy` limpios tras el borrado; se levantó la app (`uvicorn`) y se confirmó por `openapi.json` que `/api/v1/rag-services*` ya no existe (`404`) y que el resto de rutas (`health`, `embedding`, `storage`) sigue registrado sin cambios.
+- **Impacto:** Ninguno funcional — no había consumidores. Se redujo superficie de código muerto y una futura fuente de confusión (una API que aparentaba estar completa pero no hacía nada).
 
 ### P-10 — `storage-upload-vectorization` sin integrar
 
@@ -209,6 +218,7 @@ Cómo usarlo:
 - **Impacto:** Un consumidor de la API tenía que recordar dos convenciones distintas según el recurso.
 - **Solución aplicada:** se aplicó `get_camel_case_config()` (mismo helper de `app/core/schema.py` que ya usan `embedding`/`storage`) a `RagServiceBase`, `RagServiceStatusUpdate`, `RagServiceResponse` (con `from_attributes=True`, preservando la validación desde la entidad de dominio) y `RagServiceListResponse`. La API ahora serializa `serviceId`, `llmProvider`, `chatModel`, `embeddingModel`, `vectorBackend`, `baseUrl`, `createdAt`, `updatedAt` de forma consistente con el resto del servicio. Por `populate_by_name=True`, el `snake_case` original se sigue aceptando de entrada (no rompe a nadie que ya probara la API en `snake_case`), pero toda respuesta ahora sale en `camelCase`. `api.md` se actualizó con los nombres de campo nuevos.
 - **Nota:** es un cambio de contrato de respuesta (rompe a cualquier consumidor que ya dependiera de los nombres `snake_case` de salida). Dado que el repositorio es en memoria, sin persistencia ni consumidores documentados fuera de este mismo servicio, se consideró de bajo riesgo aplicarlo ahora en vez de dejarlo como deuda perpetua.
+- **Nota 2026-08-11:** el feature `rag-services` completo (incluyendo `app/schemas/rag_service.py`, mencionado arriba) se eliminó al resolver P-09 por no tener ningún consumidor. Esta entrada queda como registro histórico de la decisión tomada mientras el feature existió.
 
 ### P-16 — `/storage/chunk` no declara sus campos como `Form()`, no aparece bien en OpenAPI
 
@@ -404,3 +414,70 @@ Detectados el 2026-08-11 al analizar el código real de `edi-ai-proyectos-backen
 - **Solución aplicada:** `_sanitize_collection_name` en `RAGService` reemplaza cualquier carácter fuera de `[0-9a-zA-Z_]` por `_` (usando `\W` con `re.ASCII` para no dejar pasar letras unicode, que Python trata como "word chars" pero Milvus no acepta), y antepone `_` si el resultado empieza con dígito. Se aplica tanto al nombre de colección como al prefijo (`rag_collection_name_prefix`) antes de combinarlos. Es un fix central en `RAGService`, no solo en el código nuevo de P-10 — protege cualquier caller de `/embedding/*`, incluyendo la futura integración real de Java.
 - **Verificación real:** `_sanitize_collection_name('project-42')` → `'project_42'`; con espacios/puntos (`'mi coleccion.v2'`) → `'mi_coleccion_v2'`; empezando con dígito (`'42-cosas'`) → `'_42_cosas'`. Confirmado además indirectamente por las pruebas end-to-end de P-10/P-11 (colecciones `project_42`/`project_77` creadas y usadas correctamente en Milvus real).
 - **Nota para integración Java:** documentado en `integracion-java-storage.md` — el nombre de colección que Java construya como `"project-{id}"` va a llegar sanitizado a `"project_{id}"` en Milvus; no hace falta que Java cambie su convención, pero el nombre real en Milvus difiere ligeramente (guion → guion bajo) de lo que Java arma internamente.
+
+### P-27 — Embeddings vía API real de OpenAI (además del modelo local)
+
+- **Estado:** Resuelto
+- **Detectado:** 2026-08-11, a pedido explícito: usar el mismo modelo de embeddings que ya es productivo en `edi-ai-analysis-ai` (`text-embedding-3-large`, vía `OpenAIEmbeddings` de langchain, dimensión 3072 — ver `edi-ai-analysis-ai/EMBEDDINGS_Y_BUSQUEDA_VECTORIAL.md` sección 1).
+- **Resuelto el:** 2026-08-11
+- **Ubicación:** `app/infrastructure/embeddings/embedding_provider.py` (reescrito con dos backends), `app/core/config.py` (`rag_embedding_provider`, `openai_api_key`, `rag_openai_embedding_dimensions`), `pyproject.toml` (dependencia `openai`, y `numpy<2.5.0` — ver nota aparte abajo), `.env`/`.env.example`, `Dockerfile` (comentarios).
+- **Descripción:** Antes de este cambio, `EmbeddingProvider` estaba hardcodeado a `sentence-transformers` local (resultado de P-04). Se pidió agregar la API real de OpenAI como opción, configurable por variable de entorno, con OpenAI como default (no el local) porque ya es el modelo productivo del servicio que este microservicio reemplaza.
+- **Solución aplicada:** `EmbeddingProvider` ahora delega en uno de dos backends internos según `RAG_EMBEDDING_PROVIDER` (`openai` default | `local`): `_OpenAIEmbeddingBackend` (cliente oficial `openai`, modelo `RAG_EMBEDDING_MODEL`, default `text-embedding-3-large`) y `_LocalEmbeddingBackend` (el `SentenceTransformerEmbeddingFunction` que ya existía, sin cambios de comportamiento). La dimensión del vector (necesaria para crear la colección en el vector store) se resuelve sin llamar a la API: tabla de dimensiones nativas conocidas para los modelos de OpenAI soportados (`text-embedding-3-large`=3072, `text-embedding-3-small`=1536, `text-embedding-ada-002`=1536), con `RAG_OPENAI_EMBEDDING_DIMENSIONS` como override explícito (también permite pedirle a la API un vector truncado vía el parámetro `dimensions`, solo soportado por los modelos v3, para bajar costo/almacenamiento). Falla rápido y con mensaje claro en el constructor (no en el primer request real) si: falta `OPENAI_API_KEY` con provider `openai`, el modelo no está en la tabla de dimensiones conocidas y no hay override, o el valor de `RAG_EMBEDDING_PROVIDER` no es `openai`/`local`.
+- **Seguridad:** la API key y la key de Pinecone que se compartieron como ejemplo de la config vieja quedaron expuestas en la conversación — se le indicó al usuario rotarlas de inmediato y no se escribió esa key literal en ningún archivo del repo ni en `.env`. `.env` local quedó con `OPENAI_API_KEY=` vacío, pendiente de que el usuario pegue una key nueva directamente en el archivo.
+- **Verificación real:** `ruff`/`mypy` limpios. Backend OpenAI verificado con el cliente mockeado (sin key real, sin llamadas de red): dimensión default 3072, override de `RAG_OPENAI_EMBEDDING_DIMENSIONS` respetado end-to-end, y los tres casos de error (key faltante, modelo desconocido sin override, provider inválido) fallan con el mensaje esperado. Backend local verificado real (carga el modelo real, dim=384, igual que antes de este cambio). Se levantó la app completa con el `.env` real (provider `openai`, sin key todavía): arranca sin error (la construcción de `EmbeddingProvider` es lazy, no ocurre en el startup), y `/embedding/save_document_vecstore` responde `500` con el mensaje claro de `OPENAI_API_KEY` faltante — no un traceback opaco. **No se pudo verificar una llamada real a la API de OpenAI** (sin una key vigente disponible en este entorno que no fuera la comprometida) — pendiente de que el usuario la pruebe con una key real.
+- **Nota colateral (hallazgo, no pedido):** agregar `openai` como dependencia rompió `mypy` (no `ruff`) con un error de sintaxis en el stub empaquetado de `numpy>=2.5` (usa `type X = ...`, sintaxis PEP 695, incompatible con `python_version=3.11` configurado en `[tool.mypy]`). `pymilvus`/`sentence-transformers` no disparaban este problema porque `pymilvus.*` está en la lista de `ignore_missing_imports` — `openai` sí tiene stubs propios y por eso mypy sigue sus imports, incluida su dependencia opcional de `numpy` (helpers de audio, sin relación con embeddings). Se fijó `numpy<2.5.0` como dependencia explícita (antes era 100% transitiva) hasta que P-18 suba el proyecto a Python 3.12.
+- **Pendiente relacionado (ver también P-04):** el modelo default (`text-embedding-3-large`) se eligió por continuidad con el sistema que se reemplaza, no por una evaluación propia de calidad de retrieval — igual que ya estaba anotado para el modelo local.
+
+### P-28 — Integrar `edi-ai-operator` con `ai-rag-service-manager`
+
+- **Estado:** Resuelto (parcial) — código base implementado y verificado; faltan dos piezas de contenido/DB que no se pueden completar desde este repo (ver abajo).
+- **Detectado:** 2026-08-11.
+- **Avance el:** 2026-08-11.
+- **Ubicación:** análisis completo en [`integracion-operator-rag.md`](./integracion-operator-rag.md). Código en `edi-ai-operator` (rama `dev`): `src/service/rag/rag_service_client.py` (nuevo), `src/agents/deep_insight_engine/tools/rag_document_search.py` (nuevo), `src/agents/deep_insight_engine/tools/tools_registry.py` (registrada), `src/agents/deep_insight_engine/tools/company_document_query.py` (migrado), `src/agents/deep_insight_engine/prompts_constants.py` (`PromptTemplate.RAG_DOCUMENT_SEARCH`), `src/service/report/cache_service.py` (mensajes de progreso), `.env` (`RAG_SERVICE_BASE_URL`).
+- **Investigación previa a implementar (resolvió las dos preguntas abiertas originales):**
+  - **Mapeo de proyecto:** confirmado por código (no solo inferido) que `parameters["company_id"]` (= `planning_input.project.id`, construido en `build_parameters`, `deep_insight_utils.py:730`) es el mismo `id_project`/`projectId` que entra a la API (`src/api/deep_insight_engine/request.py`, campo requerido `projectId`). El schema de `edi-ai-operator` tiene `database/entities/document.py` con `unique_code`, `id_project`, `is_vectorized` — mismos campos que la entidad `Document` de Java — evidencia fuerte de que comparten el mismo espacio de IDs de proyecto, aunque no se confirmó que sea literalmente la misma instancia de Postgres (hosts distintos en los `.env` revisados). **Se implementó sobre esta asunción**; queda como riesgo a confirmar con el equipo antes de un ambiente real.
+  - **Quién indexa:** no se encontró ningún pipeline de indexación activo en `edi-ai-operator` (`dev`) — se asume que Java ya indexa vía P-10, y esta tool solo busca. No se implementó indexación nueva en `edi-ai-operator`.
+- **Lo que quedó implementado y activo:**
+  - `rag_service_client.py`: `search_similar_documents()` y `download_file()`, únicos puntos de entrada HTTP a `ai-rag-service-manager` desde este repo.
+  - Tool `rag_document_search`, registrada en `TOOLS_REGISTRY`. Resuelve la colección como `project_{company_id}`, llama a `search_similar_documents`, arma contexto y sintetiza respuesta con `invoke_model` — mismo patrón que `company_document_query`.
+  - `company_document_query.py` migrado: ya no usa `StorageService` (GCS directo) para descargar documentos de la empresa, usa `rag_service_client.download_file`.
+  - **API de simulación** (`POST /rag-document-search/simulate`, mismo patrón que la de `company_document_query`): `src/api/rag_document_search/` (request/response/controller), `src/service/rag_document_search/rag_document_search_simulation_service.py`, wiring en `src/api/dependencies.py` y `src/api/routes.py`. Llama a la tool real con `company_id`+`query`, sin pasar por moderator/planner/selector de tools — pensada exactamente para lo que se pidió: poder probar la tool aislada antes de validarla integrada al agente completo.
+- **Lo que NO se pudo completar (bloqueantes de contenido/DB, no de código):**
+  - El LLM (`invoke_model`) resuelve el prompt de cada tool desde una tabla `CatPrompt` en la base de datos, por `(nombre, id_project)` (`prompt_config_service.get_prompt_by_type`). `PromptTemplate.RAG_DOCUMENT_SEARCH` no tiene fila correspondiente todavía — sin eso, la tool falla en runtime al intentar construir el mensaje. Es contenido/prompt-engineering, no algo que deba inventarse sin el equipo. **El usuario indicó que se encarga de crear esta fila.**
+  - Que un "worker" del agente pueda seleccionar esta tool (`name_tool_implemented`) también es configuración en base de datos (`cat_tools`/`tools_implemented`, consumida vía `team_members_by_area`) — hace falta una fila nueva ahí para que el agente pueda elegirla en runtime. Tampoco se puede completar desde código.
+  - **Hallazgo adicional, no introducido por esta integración:** `build_placeholders` (`src/agents/deep_insight_engine/prompt_utils.py:38`) busca el prompt con `parameters.get("id_company", None)`, pero la clave real que se puebla en todo el sistema es `company_id` — nunca `id_company`. Esto significa que el lookup de prompt **siempre** resuelve con `id_project=None`, para las 13 tools del registry, no solo para esta. **Consecuencia práctica para cuando se cree la fila de `CatPrompt`: debe tener `id_project = NULL` (global), no scoped a un proyecto específico, o nunca se va a encontrar.** Es un bug preexistente y transversal — no se corrigió aquí por su alcance (afecta a todas las tools), solo se documenta.
+- **Verificación real (no simulada, dos rondas):**
+  1. Se instaló el entorno de `edi-ai-operator` (`uv pip install -e ".[dev]"`), se corrigió un bug de entorno (`uv` apuntaba al `.venv` de otro proyecto por una variable `VIRTUAL_ENV` residual), se formateó con `black`, y se corrió un import-check real de todo el grafo de módulos tocados (sin mocks) — pasa limpio. Se levantó `ai-rag-service-manager` real (Milvus real, `RAG_EMBEDDING_PROVIDER=local`), se indexó un documento de prueba en `project_999`, y se llamó la función real del cliente de `edi-ai-operator` (`rag_service_client.search_similar_documents`) y las funciones internas de la tool contra ese servicio real — funcionó de punta a punta. Esto destapó P-29 (ver abajo).
+  2. Con la API de simulación ya construida, se llamó `RagDocumentSearchSimulationService.simulate(70, None)` **contra la base de datos Postgres real de `edi-ai-operator`** (proyecto real, id 70, "Event Express", consultado directo con SQL para confirmarlo) y contra `ai-rag-service-manager` real: encontró el proyecto, resolvió `indexVecstore=project_70`, ejecutó la búsqueda semántica real, y se detuvo exactamente en el punto esperado (`KeyError` por la fila de `CatPrompt` faltante) — confirmando con precisión el único bloqueante real restante, y destapando el bug de `id_company`/`company_id` de paso. No se probó el flujo de storage migrado en `company_document_query.py` (requiere credenciales GCS reales) ni la tool integrada al agente completo (requiere las dos filas de DB).
+- **Pendiente para continuar (checklist actualizado, ver también `integracion-operator-rag.md`):**
+  - [ ] Confirmar con el equipo que `company_id` = mismo `idProject` que Java (ver arriba).
+  - [ ] Agregar la fila de `CatPrompt` para `rag_document_search`, **con `id_project = NULL`** (ver hallazgo del bug `id_company`/`company_id` arriba) — a cargo del usuario.
+  - [ ] Agregar la fila de worker/tool (`cat_tools`/`tools_implemented`) para que el agente pueda seleccionar la tool — a cargo del usuario.
+  - [ ] Una vez creadas esas filas, volver a correr `POST /rag-document-search/simulate` para confirmar `200` con respuesta real del LLM.
+  - [ ] Migrar el resto de consumidores de `StorageService` (`thought_persistence_service.py`, `chat_history_service.py`, `context_memory_service.py`, `comun_service.py`, y los no revisados en detalle) — solo se migró `company_document_query.py` en esta pasada.
+  - [ ] Probar `rag_document_search` integrada al agente completo (moderator/planner/selector de tools) una vez resueltas las filas de DB.
+- **Nota histórica:** existe una rama divergente en `edi-ai-operator` (`embedding`, no fusionada a `dev`, commit `1dfcf78`) con un prototipo previo de RAG embebido (`rag_service.py`, `vector_store_manager.py`, mismas variables de entorno que hoy tiene `ai-rag-service-manager`) — es, literalmente, el antecesor de este mismo microservicio. Se abandonó ahí antes de conectarse a ninguna tool, al decidir extraerlo a un servicio separado.
+
+### P-29 — `search_similar_documents` devolvía `text_preview` en snake_case dentro de `results[]`
+
+- **Estado:** Resuelto
+- **Detectado:** 2026-08-11, probando P-28 end-to-end: `edi-ai-operator` esperaba `textPreview` (documentado en `api.md`) pero recibía `text_preview`.
+- **Resuelto el:** 2026-08-11
+- **Ubicación:** `app/schemas/embedding.py` (`SearchSimilarDocumentsResponse.results`).
+- **Descripción:** `results` estaba tipado como `list[dict[str, Any]]` — un dict libre, no un modelo Pydantic. `get_camel_case_config()` en el modelo contenedor (`SearchSimilarDocumentsResponse`) solo convierte los *campos* del propio modelo a camelCase; no toca las claves de un `dict[str, Any]` anidado. El dict se armaba en `document_embedding_service.py` con la clave Python literal `text_preview`, que salía tal cual en el JSON — inconsistente con el resto de la API (`list_documents`, que sí usa un modelo tipado, `DocumentSummaryResponse`, y sí sale en camelCase).
+- **Impacto:** Cualquier consumidor que confiara en `api.md` (que documenta camelCase para toda la API) y buscara `textPreview` no encontraba el campo. Encontrado al integrar `edi-ai-operator`, que construyó su cliente contra la documentación, no contra una prueba real.
+- **Solución aplicada:** se cambió `results: list[dict[str, Any]]` a `results: list[DocumentSummaryResponse]` — el mismo modelo que ya usa `list_documents` y que tiene exactamente los mismos campos (`id`, `score`, `metadata`, `text_preview`) que ya armaba `search_similar_documents`. Cero cambios en `document_embedding_service.py`: al ser un modelo Pydantic con `get_camel_case_config()`, la serialización a `textPreview` es automática.
+- **Verificación real:** se indexó un documento real en Milvus, se llamó `POST /embedding/search_similar_documents`, y se confirmó que la clave en la respuesta cambió de `text_preview` a `textPreview` sin ningún otro cambio en el payload. Verificado también desde el lado consumidor (`edi-ai-operator`'s `rag_service_client.search_similar_documents`, ver P-28).
+
+### P-30 — `RAG_OPENAI_EMBEDDING_DIMENSIONS=""` rompía el arranque leyendo config desde Vault
+
+- **Estado:** Resuelto
+- **Detectado:** 2026-08-12, arranque real con `USE_VAULT_CONFIG=true` contra un Vault real: `pydantic_core.ValidationError: Input should be a valid integer, unable to parse string as an integer [...] input_value=''`.
+- **Resuelto el:** 2026-08-12
+- **Ubicación:** `app/core/config.py` (`Settings.rag_openai_embedding_dimensions`, campo `int | None`).
+- **Descripción:** en `.env`, un valor "sin definir" para este campo se resuelve dejando la línea comentada — la key ni siquiera llega al proceso, y `Settings` usa el default `None`. Vault (y cualquier fuente de config que no pueda "omitir" una key, solo mandarla vacía) no tiene ese mecanismo: si la key existe en el secret con valor `""`, `Settings(**config)` recibe literalmente `rag_openai_embedding_dimensions=""`, y pydantic intenta parsearlo como `int` y falla — tumba el arranque completo del servicio, no solo el embedding provider.
+- **Impacto:** Cualquier despliegue con Vault que incluyera esta key vacía (recomendada así en el JSON de referencia armado en esta misma conversación) no podía arrancar en absoluto — `ValidationError` en `create_app()`, antes de que el servidor HTTP levante.
+- **Solución aplicada:** `field_validator("rag_openai_embedding_dimensions", mode="before")` que convierte `""` a `None` antes de la validación de tipo. Es el único campo `int | None` de `Settings` (confirmado por grep), no hizo falta un mecanismo genérico para otros campos.
+- **Verificación real:** `Settings(rag_openai_embedding_dimensions="")` → `None`; `Settings(rag_openai_embedding_dimensions="256")` → `256` (un valor real sigue funcionando); `Settings()` sin la key → `None` (default, sin cambios). `ruff`/`mypy` limpios.
+- **Nota:** no hizo falta que el usuario quite la key de Vault — con este fix, dejarla en `""` es válido y equivalente a omitirla.
+

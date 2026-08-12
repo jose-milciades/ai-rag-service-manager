@@ -24,6 +24,15 @@ dependencies = [
   "pymilvus[model]>=2.5.0,<4.0.0",
   "sentence-transformers>=3.0.0,<6.0.0",
   "torch>=2.0.0,<3.0.0",
+  "openai>=1.50.0,<2.0.0",
+  # numpy>=2.5 empaqueta stubs con sintaxis PEP 695 ("type X = ...") sin
+  # condicionar por version, incompatible con python_version=3.11 de mypy
+  # (ver comentario en [tool.mypy] mas abajo) -- se detecto al agregar
+  # "openai", cuyo modulo si tiene stubs propios y por eso mypy lo sigue
+  # (a diferencia de pymilvus/sentence-transformers, con
+  # ignore_missing_imports). Fijado por debajo de 2.5 hasta el upgrade a
+  # Python 3.12 de P-18.
+  "numpy<2.5.0",
 ]
 
 [project.optional-dependencies]
@@ -85,9 +94,7 @@ testpaths = ["tests"]
 python_version = "3.11"
 files = ["app"]
 # Sin esto, mypy colisiona: la mayoria de los paquetes bajo app/ no tienen
-# __init__.py (namespace packages implicitos) y hay varios modulos que
-# comparten nombre de archivo en carpetas distintas (p.ej. rag_service.py en
-# domain/entities, schemas, services y services/rag).
+# __init__.py (namespace packages implicitos).
 explicit_package_bases = true
 check_untyped_defs = true
 disallow_untyped_defs = true

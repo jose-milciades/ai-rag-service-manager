@@ -1,28 +1,13 @@
 from functools import lru_cache
 
 from app.core.config import get_settings
-from app.domain.repositories.rag_service_repository import RagServiceRepository
 from app.infrastructure.clients.storage_client import StorageClient
 from app.infrastructure.clients.storage_config import StorageConfig
 from app.infrastructure.embeddings.embedding_provider import EmbeddingProvider
-from app.infrastructure.repositories.in_memory_rag_service_repository import (
-    InMemoryRagServiceRepository,
-)
 from app.infrastructure.vector_store.vector_store_manager import VectorStoreManager
 from app.services.embedding.document_embedding_service import DocumentEmbeddingService
 from app.services.rag.rag_agent import RAGAgent
-from app.services.rag_service import RagServiceManager
 from app.services.storage_service import StorageService
-
-
-@lru_cache
-def get_rag_service_repository() -> RagServiceRepository:
-    return InMemoryRagServiceRepository()
-
-
-@lru_cache
-def get_rag_service_manager() -> RagServiceManager:
-    return RagServiceManager(repository=get_rag_service_repository())
 
 
 @lru_cache

@@ -12,11 +12,8 @@ Documentación interactiva (Swagger/Redoc) siempre disponible en runtime:
 ## Convenciones
 
 - **Autenticación:** ninguno de los endpoints requiere autenticación ni autorización (ver `pendientes.md` P-13).
-- **Formato de nombres de campo JSON:**
-  - `rag-services`: `snake_case` (los schemas no definen alias).
-  - `embedding` y `storage`: `camelCase` (los schemas usan `get_camel_case_config`, con `populate_by_name=True`, así que también aceptan `snake_case` de entrada, pero la salida serializa en `camelCase`).
-  - Ver `pendientes.md` P-15.
-- **Errores:** los controllers de `embedding` capturan cualquier excepción y responden `500` con `detail` descriptivo. `rag-services` propaga `HTTPException` explícitas del service (`404`, `409`). `storage` propaga `HTTPException` explícitas o `422` por campos faltantes en `/storage/chunk`.
+- **Formato de nombres de campo JSON:** `embedding` y `storage` usan `camelCase` (los schemas usan `get_camel_case_config`, con `populate_by_name=True`, así que también aceptan `snake_case` de entrada, pero la salida serializa en `camelCase`), salvo `list_unique_code_documents` (ver esa sección).
+- **Errores:** los controllers de `embedding` capturan cualquier excepción y responden `500` con `detail` descriptivo. `storage` propaga `HTTPException` explícitas o `422` por campos faltantes en `/storage/chunk`.
 
 ---
 
@@ -93,89 +90,9 @@ Readiness real: devuelve `503` si alguna integración marcada como **crítica** 
 
 ---
 
-## RAG Services — `/api/v1/rag-services`
-
-Archivo: `app/api/routes/rag_services_controller.py`. CRUD de definiciones operativas de servicios RAG. Persistencia **en memoria** (`InMemoryRagServiceRepository`, ver `pendientes.md` P-09) — no sobrevive a un restart.
-
-**Convención de nombres:** al igual que `embedding`/`storage`, los schemas usan `camelCase` en el JSON (alineado en `pendientes.md` P-15; antes usaban `snake_case`, inconsistente con el resto de la API). También aceptan `snake_case` de entrada por compatibilidad (`populate_by_name=True`), pero la salida siempre serializa en `camelCase`.
-
-Entidad `RagService` (`app/domain/entities/rag_service.py`):
-
-| Campo (JSON) | Tipo | Notas |
-|---|---|---|
-| `serviceId` | `string` | UUID generado por el server, solo lectura |
-| `name` | `string` | 3–100 caracteres, único (case-insensitive) |
-| `description` | `string \| null` | máx. 300 caracteres |
-| `llmProvider` | `string` | 2–50 caracteres |
-| `chatModel` | `string` | 2–100 caracteres |
-| `embeddingModel` | `string` | 2–100 caracteres |
-| `vectorBackend` | `string` | 2–50 caracteres |
-| `baseUrl` | `string \| null` | opcional |
-| `status` | `enum` | `draft` \| `active` \| `disabled` |
-| `metadata` | `dict[str, str]` | libre |
-| `createdAt` / `updatedAt` | `datetime` | ISO 8601, solo lectura |
-
-> Nota funcional: estas definiciones **no se consultan** en ningún punto del flujo de `/embedding/*` o `/rag_query`. Son dos capacidades administradas por separado hoy (ver análisis general en la conversación / `pendientes.md` P-04, P-05).
-
-### `GET /api/v1/rag-services`
-
-Lista todos los registros.
-
-**Respuesta 200** — `RagServiceListResponse`
-
-```json
-{ "items": [ { "serviceId": "...", "name": "...", "...": "..." } ], "total": 1 }
-```
-
-### `POST /api/v1/rag-services`
-
-Crea una nueva definición. Falla con `409 Conflict` si ya existe un servicio con el mismo `name` (case-insensitive).
-
-**Body** — `RagServiceCreate` (= `RagServiceBase` + `status` opcional, default `draft`)
-
-```json
-{
-  "name": "soporte-interno",
-  "description": "RAG para tickets de soporte",
-  "llmProvider": "openai",
-  "chatModel": "gpt-4o-mini",
-  "embeddingModel": "text-embedding-3-small",
-  "vectorBackend": "milvus",
-  "baseUrl": null,
-  "metadata": { "team": "cx" },
-  "status": "draft"
-}
-```
-
-**Respuesta 201** — `RagServiceResponse` (body anterior + `serviceId`, `createdAt`, `updatedAt`).
-
-### `GET /api/v1/rag-services/{service_id}`
-
-Obtiene un registro por id. `404` si no existe.
-
-### `PUT /api/v1/rag-services/{service_id}`
-
-Reemplazo completo del recurso. **Todos** los campos de `RagServiceUpdate` (= `RagServiceBase` + `status` requerido) son obligatorios salvo los opcionales del base. Si se cambia `name`, se vuelve a validar unicidad (`409` si colisiona).
-
-### `PATCH /api/v1/rag-services/{service_id}/status`
-
-Mutación parcial, solo el estado.
-
-**Body** — `RagServiceStatusUpdate`
-
-```json
-{ "status": "active" }
-```
-
-### `DELETE /api/v1/rag-services/{service_id}`
-
-`204 No Content` si se elimina. `404` si no existe.
-
----
-
 ## Embedding — `/api/v1/embedding`
 
-Archivo: `app/api/routes/embedding_controller.py`. Todos los endpoints son `POST` con body JSON, campos en `camelCase` (salvo `list_unique_code_documents`, ver abajo). Motor subyacente: `RAGService` (`app/services/rag/rag_service.py`), con embeddings reales (`sentence-transformers`, ver `pendientes.md` P-04) sobre `VECTOR_DB_TYPE=memory|milvus` (default en memoria; Milvus real disponible, ver `pendientes.md` P-08).
+Archivo: `app/api/routes/embedding_controller.py`. Todos los endpoints son `POST` con body JSON, campos en `camelCase` (salvo `list_unique_code_documents`, ver abajo). Motor subyacente: `RAGService` (`app/services/rag/rag_service.py`), con embeddings reales — API de OpenAI por defecto o `sentence-transformers` local (`RAG_EMBEDDING_PROVIDER=openai|local`, ver `pendientes.md` P-04/P-27) — sobre `VECTOR_DB_TYPE=memory|milvus` (default en memoria; Milvus real disponible, ver `pendientes.md` P-08).
 
 ### `POST /api/v1/embedding/save_document_vecstore`
 
@@ -290,7 +207,7 @@ Límite interno de chunks retornados: `settings.rag_max_embeddings_per_document`
 
 ### `POST /api/v1/embedding/search_similar_documents`
 
-Búsqueda semántica (hoy: similitud coseno sobre embeddings hash) sobre una colección.
+Búsqueda semántica (embeddings reales, ver P-04/P-27) sobre una colección.
 
 **Body** — `SearchSimilarDocumentsRequest`
 
@@ -301,7 +218,7 @@ Búsqueda semántica (hoy: similitud coseno sobre embeddings hash) sobre una col
 | `topK` | `int` | no | 1–100, default `settings.rag_default_top_k` (5) |
 | `metadataFilter` | `object \| null` | no | |
 
-**Respuesta 200** — `SearchSimilarDocumentsResponse`: `{ success, query, indexName, totalResults, results: [...], message? }`
+**Respuesta 200** — `SearchSimilarDocumentsResponse`: `{ success, query, indexName, totalResults, results: [{ id, score, metadata, textPreview }], message? }` — mismo shape de item (`DocumentSummaryResponse`) que `list_documents`.
 
 ### `POST /api/v1/embedding/rag_query`
 
@@ -435,12 +352,6 @@ Requiere que `STORAGE_PUBLIC_BUCKET_NAME` esté configurado (ver `pendientes.md`
 | GET | `/` | `app/main.py` | root |
 | GET | `/api/v1/health/live` | `health_controller.py` | health |
 | GET | `/api/v1/health/ready` | `health_controller.py` | health |
-| GET | `/api/v1/rag-services` | `rag_services_controller.py` | rag-services |
-| POST | `/api/v1/rag-services` | `rag_services_controller.py` | rag-services |
-| GET | `/api/v1/rag-services/{service_id}` | `rag_services_controller.py` | rag-services |
-| PUT | `/api/v1/rag-services/{service_id}` | `rag_services_controller.py` | rag-services |
-| PATCH | `/api/v1/rag-services/{service_id}/status` | `rag_services_controller.py` | rag-services |
-| DELETE | `/api/v1/rag-services/{service_id}` | `rag_services_controller.py` | rag-services |
 | POST | `/api/v1/embedding/save_document_vecstore` | `embedding_controller.py` | embedding |
 | POST | `/api/v1/embedding/delete_index_vecstore` | `embedding_controller.py` | embedding |
 | POST | `/api/v1/embedding/delete_document` | `embedding_controller.py` | embedding |

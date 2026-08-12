@@ -1,11 +1,8 @@
 # ai-rag-service-manager
 
-`ai-rag-service-manager` es un microservicio construido con FastAPI y Uvicorn para dos responsabilidades principales:
+`ai-rag-service-manager` es un microservicio construido con FastAPI y Uvicorn para exponer un flujo de embedding, indexación y retrieval sobre una base vectorial (`VECTOR_DB_TYPE=memory|milvus`), y para centralizar el acceso a storage (GCS) del resto del ecosistema — ver `Arquitectura del sistema (multi-servicio)` más abajo.
 
-1. administrar definiciones operativas de servicios RAG;
-2. exponer un flujo de embedding, indexación y retrieval sobre una base vectorial abstraída.
-
-La solución está organizada como una arquitectura modular por capas. No busca una hexagonal pura, pero sí mantiene una separación clara entre transporte HTTP, lógica de aplicación, dominio, configuración compartida e infraestructura técnica.
+La solución está organizada como una arquitectura modular por capas. No busca una hexagonal pura, pero sí mantiene una separación clara entre transporte HTTP, lógica de aplicación, configuración compartida e infraestructura técnica.
 
 ## Evaluación de la arquitectura
 
@@ -15,7 +12,6 @@ Puntos fuertes:
 
 - los controllers HTTP son delgados y delegan la lógica a servicios;
 - la configuración está centralizada en `Settings` y no dispersa por módulos;
-- el dominio de `RagService` tiene su entidad y su contrato de repositorio propios;
 - la infraestructura externa está separada en clientes y adapters;
 - el wiring de dependencias está concentrado en `app/api/dependencies/services.py`;
 - el motor RAG no depende de FastAPI ni conoce detalles HTTP.
@@ -30,21 +26,7 @@ En su estado actual, la estructura es coherente, mantenible y adecuada para evol
 
 ## Definición funcional
 
-El microservicio expone dos capacidades:
-
-- gestión de configuraciones de servicios RAG (`rag-services`);
-- operación documental para embeddings y retrieval (`embedding`).
-
-Una definición de servicio RAG administra información como:
-
-- nombre y descripción;
-- proveedor LLM;
-- modelo de chat;
-- modelo de embeddings;
-- backend vectorial deseado;
-- URL base opcional;
-- metadatos operativos;
-- estado (`draft`, `active`, `disabled`).
+El microservicio expone la operación documental para embeddings y retrieval (`embedding`), y storage centralizado (`storage`) para el resto del ecosistema.
 
 La parte documental permite:
 
@@ -98,7 +80,6 @@ Detalle completo — mapeo de campos, incompatibilidades de contrato ya resuelta
 - `app/main.py`: punto de entrada, creación de la aplicación, middleware y ciclo de vida.
 - `app/api/`: capa HTTP; contiene controllers y dependencias de FastAPI.
 - `app/core/`: configuración, logging y utilidades técnicas compartidas.
-- `app/domain/`: entidades y contratos del dominio.
 - `app/services/`: lógica de aplicación y orquestación de casos de uso.
 - `app/infrastructure/`: clientes externos, repositorios concretos y vector store adapters.
 - `app/schemas/`: modelos Pydantic de entrada y salida para la API.
@@ -113,19 +94,13 @@ ai-rag-service-manager/
 │   │   │   └── services.py
 │   │   ├── routes/
 │   │   │   ├── embedding_controller.py
-│   │   │   ├── health_controller.py
-│   │   │   └── rag_services_controller.py
+│   │   │   └── health_controller.py
 │   │   └── router_controller.py
 │   ├── core/
 │   │   ├── config.py
 │   │   ├── logging.py
 │   │   ├── schema.py
 │   │   └── utils.py
-│   ├── domain/
-│   │   ├── entities/
-│   │   │   └── rag_service.py
-│   │   └── repositories/
-│   │       └── rag_service_repository.py
 │   ├── infrastructure/
 │   │   ├── clients/
 │   │   │   ├── config_server.py
@@ -134,15 +109,12 @@ ai-rag-service-manager/
 │   │   │   └── storage_config.py
 │   │   ├── embeddings/
 │   │   │   └── embedding_provider.py
-│   │   ├── repositories/
-│   │   │   └── in_memory_rag_service_repository.py
 │   │   └── vector_store/
 │   │       ├── milvus_vector_store.py
 │   │       ├── vector_store_interface.py
 │   │       └── vector_store_manager.py
 │   ├── schemas/
 │   │   ├── embedding.py
-│   │   ├── rag_service.py
 │   │   └── storage.py
 │   ├── services/
 │   │   ├── embedding/
@@ -150,7 +122,6 @@ ai-rag-service-manager/
 │   │   ├── rag/
 │   │   │   ├── rag_agent.py
 │   │   │   └── rag_service.py
-│   │   ├── rag_service.py
 │   │   └── storage_service.py
 │   └── main.py
 ├── .env.example
@@ -165,12 +136,11 @@ ai-rag-service-manager/
 2. `app/api/router_controller.py` compone los controllers HTTP.
 3. Los controllers resuelven dependencias desde `app/api/dependencies/services.py`.
 4. Los servicios aplican la lógica de negocio o de aplicación.
-5. La infraestructura aporta repositorios, clients tecnicos y acceso al vector store.
+5. La infraestructura aporta clients tecnicos y acceso al vector store.
 
 ### Convencion de infraestructura
 
 - `clients`: conexiones a SDKs y APIs externas
-- `repositories`: implementaciones concretas de persistencia del dominio
 - `vector_store`: adapters tecnicos para backends vectoriales
 
 ## Componentes clave
@@ -178,20 +148,17 @@ ai-rag-service-manager/
 ### API
 
 - `health_controller.py`: endpoints de liveness y readiness.
-- `rag_services_controller.py`: CRUD de definiciones de servicios RAG.
 - `embedding_controller.py`: operaciones documentales y consultas RAG.
 
 ### Servicios
 
-- `RagServiceManager`: administra el ciclo de vida de configuraciones RAG.
 - `DocumentEmbeddingService`: indexa documentos, lista resultados y ejecuta búsquedas.
 - `RAGService`: servicio central de chunking, embedding real e indexación/retrieval.
 - `RAGAgent`: facade orientado a consultas sobre una colección de conocimiento.
 
 ### Infraestructura
 
-- `InMemoryRagServiceRepository`: persistencia temporal de definiciones RAG.
-- `EmbeddingProvider`: carga un modelo real de embeddings (`sentence-transformers`, vía `pymilvus.model`) una sola vez y lo comparte entre colecciones — ver `RAG_EMBEDDING_MODEL`/`RAG_EMBEDDING_DEVICE`/`RAG_NORMALIZE_EMBEDDINGS`.
+- `EmbeddingProvider`: genera embeddings reales, con dos backends seleccionables por `RAG_EMBEDDING_PROVIDER` — `openai` (API real de OpenAI, default; ver `pendientes.md` P-27) o `local` (`sentence-transformers`, vía `pymilvus.model`). Se construye una sola vez y se comparte entre colecciones.
 - `VectorStoreManager`: facade para el backend vectorial configurado (`VECTOR_DB_TYPE`).
 - `InMemoryVectorStore`: adapter en memoria, default para desarrollo local sin dependencias externas.
 - `MilvusVectorStore`: adapter real contra Milvus (`pymilvus.MilvusClient`) cuando `VECTOR_DB_TYPE=milvus` — colección con `id` + `vector` + un campo `payload` JSON que preserva la metadata libre que ya usa el resto de la app.
@@ -207,8 +174,7 @@ Incluido en esta versión:
 - configuración con `pydantic-settings`;
 - readiness con estado de Config Server y Eureka;
 - logging centralizado con Correlation ID;
-- CRUD de `rag-services`;
-- embeddings reales (`sentence-transformers`, local, vía `pymilvus.model`) e indexación/retrieval semántico contra memoria o Milvus (`VECTOR_DB_TYPE=memory|milvus`);
+- embeddings reales, vía API de OpenAI por defecto o `sentence-transformers` local (`RAG_EMBEDDING_PROVIDER=openai|local`) e indexación/retrieval semántico contra memoria o Milvus (`VECTOR_DB_TYPE=memory|milvus`);
 - Docker listo para ejecución local, con el modelo de embeddings pre-descargado en el build.
 
 Exclusiones intencionales:
@@ -232,13 +198,13 @@ Variables relevantes:
 - `VECTOR_DB_TYPE`
 - `MILVUS_HOST`, `MILVUS_PORT`, `MILVUS_DB_NAME`, `MILVUS_ALIAS`
 - `RAG_COLLECTION_NAME_PREFIX`, `RAG_DEFAULT_COLLECTION_NAME`
-- `RAG_EMBEDDING_MODEL`, `RAG_CHUNK_SIZE`, `RAG_CHUNK_OVERLAP`, `RAG_DEFAULT_TOP_K`
+- `RAG_EMBEDDING_PROVIDER`, `RAG_EMBEDDING_MODEL`, `OPENAI_API_KEY`, `RAG_OPENAI_EMBEDDING_DIMENSIONS`, `RAG_CHUNK_SIZE`, `RAG_CHUNK_OVERLAP`, `RAG_DEFAULT_TOP_K`
 
 Notas operativas:
 
 - `SPRING_CLOUD_CONFIG_URI` se consulta solo al arrancar la aplicación;
 - `VECTOR_DB_TYPE=milvus` requiere un Milvus real alcanzable en `MILVUS_HOST:MILVUS_PORT`; con `memory` (default) no hace falta nada externo;
-- `RAG_EMBEDDING_MODEL` se descarga/carga una sola vez al arrancar (`EmbeddingProvider`), no por request; cambiarlo implica reconstruir la imagen Docker para no depender de red en el arranque (ver sección Docker).
+- `RAG_EMBEDDING_PROVIDER` selecciona el backend de embeddings — `openai` (default, requiere `OPENAI_API_KEY`) o `local` (`sentence-transformers`, sin red ni key) — ver `pendientes.md` P-27. Se resuelve/carga una sola vez al arrancar (`EmbeddingProvider`), no por request. Con `local`, cambiar `RAG_EMBEDDING_MODEL` implica reconstruir la imagen Docker para no depender de red en el arranque (ver sección Docker); con `openai` no aplica, es una API remota.
 
 ## Ejecutar localmente
 
@@ -691,14 +657,10 @@ Pipeline mínimo en [`.github/workflows/ci.yml`](./.github/workflows/ci.yml): Ru
 - `GET /`
 - `GET /api/v1/health/live`
 - `GET /api/v1/health/ready`
-- `GET /api/v1/rag-services`
-- `POST /api/v1/rag-services`
-- `GET /api/v1/rag-services/{service_id}`
-- `PUT /api/v1/rag-services/{service_id}`
-- `PATCH /api/v1/rag-services/{service_id}/status`
-- `DELETE /api/v1/rag-services/{service_id}`
 - `POST /api/v1/embedding/save_document_vecstore`
 - `POST /api/v1/embedding/delete_index_vecstore`
+- `POST /api/v1/embedding/delete_document`
+- `POST /api/v1/embedding/list_unique_code_documents`
 - `POST /api/v1/embedding/list_documents`
 - `POST /api/v1/embedding/get_embeddings_by_unique_code`
 - `POST /api/v1/embedding/search_similar_documents`
@@ -715,11 +677,13 @@ Brechas conocidas, deuda técnica y su trazabilidad de resolución: ver [`pendie
 
 Plan de migración del microservicio Java (`edi-ai-proyectos-backend`) para que consuma `storage`/`embedding` de este servicio en vez de GCS local + `analysis-ai-service`, con el mapeo de campos exacto y las incompatibilidades de contrato detectadas: ver [`integracion-java-storage.md`](./integracion-java-storage.md).
 
+Análisis (sin implementar, ver `pendientes.md` P-28) para que `edi-ai-operator` (agente conversacional) agregue una tool de búsqueda semántica contra este servicio y migre su storage propio (GCS directo) al storage centralizado: ver [`integracion-operator-rag.md`](./integracion-operator-rag.md).
+
 ## Docker
 
 La imagen corre como usuario no-root (`appuser`, uid 1000) y aplica `apt-get upgrade` en el build para tomar parches de seguridad del SO disponibles al momento de construir (ver §26/§27 arriba y `pendientes.md` P-18 para el detalle de vulnerabilidades de imagen aún pendientes de resolver). El build usa `.dockerignore` para no copiar `.venv`, `.git`, secretos locales ni documentación interna al contexto.
 
-El build también pre-descarga el modelo de embeddings por defecto (`sentence-transformers/all-MiniLM-L6-v2`) y fija `HF_HUB_OFFLINE=1` para el runtime, para que el contenedor arranque sin depender de red ni pagar el costo de descarga en el primer request. Si cambias `RAG_EMBEDDING_MODEL` a otro modelo sin reconstruir la imagen, el arranque va a intentar descargarlo igual — falla si no hay salida a internet, porque `HF_HUB_OFFLINE=1` bloquea el fallback online. Esto agrega ~1.6GB al `.venv` (torch CPU-only + sentence-transformers + pymilvus) — ver `pendientes.md` P-19 si el tamaño de imagen es una preocupación.
+El build también pre-descarga el modelo local de embeddings por defecto (`sentence-transformers/all-MiniLM-L6-v2`) y fija `HF_HUB_OFFLINE=1` para el runtime, por si se usa `RAG_EMBEDDING_PROVIDER=local` — el default real (`openai`) es una API remota y no usa nada de esto. Con `local`, si cambias `RAG_EMBEDDING_MODEL` a otro modelo sin reconstruir la imagen, el arranque va a intentar descargarlo igual — falla si no hay salida a internet, porque `HF_HUB_OFFLINE=1` bloquea el fallback online. El backend local agrega ~1.6GB al `.venv` (torch CPU-only + sentence-transformers + pymilvus) — ver `pendientes.md` P-19 si el tamaño de imagen es una preocupación.
 
 `appuser` se crea con `--no-create-home`, así que `HOME`, `UV_CACHE_DIR` y `HF_HOME` se fijan explícitamente dentro de `/app` (que sí queda con permisos de escritura para ese usuario); sin esto, `uv run` falla al no poder crear su cache en un `$HOME` inexistente.
 

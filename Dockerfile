@@ -22,22 +22,24 @@ RUN --mount=type=cache,target=/app/.cache/uv \
 COPY README.md ./README.md
 COPY app ./app
 
-# Pre-descarga el modelo de embeddings (EmbeddingProvider) en tiempo de
-# build para que el arranque del contenedor no dependa de red y no pague el
-# costo de descarga en el primer request. Si RAG_EMBEDDING_MODEL se
-# sobreescribe en runtime con un modelo distinto al default, el arranque
-# hara la descarga real en ese momento (requiere salida a internet).
+# Pre-descarga el modelo local de embeddings (backend "local" de
+# EmbeddingProvider, ver pendientes.md P-27) en tiempo de build, por si se
+# usa RAG_EMBEDDING_PROVIDER=local, para que ese arranque no dependa de red
+# ni pague el costo de descarga en el primer request. El default de runtime
+# hoy es RAG_EMBEDDING_PROVIDER=openai (API remota, sin descarga ni modelo
+# local involucrado) -- este paso no afecta ese camino.
 RUN uv run python -c "\
 from pymilvus.model.dense import SentenceTransformerEmbeddingFunction; \
 SentenceTransformerEmbeddingFunction(model_name='sentence-transformers/all-MiniLM-L6-v2', device='cpu')"
 
-# A partir de aqui el modelo ya esta en HF_HOME: se fuerza modo offline para
-# que el arranque no intente verificar archivos contra Hugging Face Hub (sin
-# esto, cada arranque hace varios HEAD request con reintentos/backoff antes
-# de caer al cache local, incluso si el cache ya tiene todo lo necesario).
-# Si se cambia RAG_EMBEDDING_MODEL a un modelo no horneado en la imagen, hay
-# que quitar esta variable (o reconstruir la imagen) para permitir la
-# descarga real en runtime.
+# A partir de aqui el modelo local ya esta en HF_HOME: se fuerza modo offline
+# para que, si se usa el backend "local", el arranque no intente verificar
+# archivos contra Hugging Face Hub (sin esto, cada arranque hace varios HEAD
+# request con reintentos/backoff antes de caer al cache local, incluso si el
+# cache ya tiene todo lo necesario). Sin efecto sobre el backend "openai".
+# Si se cambia RAG_EMBEDDING_MODEL (con provider=local) a un modelo no
+# horneado en la imagen, hay que quitar esta variable (o reconstruir la
+# imagen) para permitir la descarga real en runtime.
 ENV HF_HUB_OFFLINE=1
 
 # Ejecutar como usuario no-root (ver README.md "Estandar de calidad..." SS26).

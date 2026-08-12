@@ -162,7 +162,7 @@ class SearchSimilarDocumentsResponse(BaseModel):
     query: str
     index_name: str
     total_results: int
-    results: list[dict[str, Any]] = Field(default_factory=list)
+    results: list[DocumentSummaryResponse] = Field(default_factory=list)
     message: str | None = None
 
 

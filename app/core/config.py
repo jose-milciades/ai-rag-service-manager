@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.vault import get_vault_client, is_vault_configured
@@ -158,8 +158,12 @@ class Settings(BaseSettings):
         default="company_knowledge_base",
         validation_alias=AliasChoices("RAG_AGENT_COLLECTION_NAME"),
     )
+    rag_embedding_provider: str = Field(
+        default="openai",
+        validation_alias=AliasChoices("RAG_EMBEDDING_PROVIDER"),
+    )
     rag_embedding_model: str = Field(
-        default="sentence-transformers/all-MiniLM-L6-v2",
+        default="text-embedding-3-large",
         validation_alias=AliasChoices("RAG_EMBEDDING_MODEL"),
     )
     rag_embedding_device: str = Field(
@@ -169,6 +173,14 @@ class Settings(BaseSettings):
     rag_normalize_embeddings: bool = Field(
         default=True,
         validation_alias=AliasChoices("RAG_NORMALIZE_EMBEDDINGS"),
+    )
+    openai_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENAI_API_KEY"),
+    )
+    rag_openai_embedding_dimensions: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("RAG_OPENAI_EMBEDDING_DIMENSIONS"),
     )
     rag_chunk_size: int = Field(default=1000, validation_alias=AliasChoices("RAG_CHUNK_SIZE"))
     rag_chunk_overlap: int = Field(
@@ -192,6 +204,16 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("RAG_UNIQUE_CODE_LIST_LIMIT"),
     )
 
+    @field_validator("rag_openai_embedding_dimensions", mode="before")
+    @classmethod
+    def _blank_optional_int_as_none(cls, value: object) -> object:
+        """Fuentes de config que no pueden omitir una key (ej. Vault, a
+        diferencia de comentar una linea en `.env`) mandan `""` para "sin
+        valor" en vez de no mandar la key -- sin esto, pydantic intenta
+        parsear `""` como int y falla. Solo aplica a este campo porque es el
+        unico `int | None` de Settings."""
+        return None if value == "" else value
+
 
 @lru_cache
 def get_settings() -> Settings:
@@ -207,6 +229,6 @@ def get_settings() -> Settings:
     """
     if is_vault_configured():
         vault = get_vault_client()
-        config = vault.load_configs(["common", "ai-rag-service-manager", "storage"])
+        config = vault.load_configs(["common", "ai-rag-service-manager", "storage", "llm_apis"])
         return Settings(**config)
     return Settings()
