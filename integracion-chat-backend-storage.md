@@ -42,8 +42,36 @@ Dado que no había ningún flujo de negocio real que migrar (a diferencia de Jav
 - No se pudo verificar `black --check` — el grupo `dev` de `pyproject.toml` no está declarado correctamente como `[dependency-groups]`/`[project.optional-dependencies]` (`dev = [...]` suelto), por lo que `uv sync --group dev` falla con "Group `dev` no está definido" — **preexistente, no introducido por este cambio, fuera de alcance corregir aquí**. Se verificó en su lugar con `py_compile` (sintaxis limpia).
 - No se pudo verificar en runtime real una llamada HTTP efectiva a `/storage/upload`/`/storage/get` — no hay ningún caller de negocio hoy que ejercite `rag_service_client.py` (ver sección 1), así que no hay un flujo end-to-end que probar todavía.
 
+## 3.1. Verificación end-to-end real (2026-08-13)
+
+A pedido explícito del usuario, se cerró la brecha de la sección 3: se creó un controller temporal de validación, `src/app/api/v1/controllers/storage_test_controller.py` (+ schemas en `src/app/api/v1/schemas/storage_test.py`), registrado en `src/main.py`:
+
+- `POST /api/chat-ai/v1/storage-test/upload` — recibe un `UploadFile`, llama `rag_service_client.upload_file`.
+- `GET /api/chat-ai/v1/storage-test/download?name=...` — llama `rag_service_client.download_file`, devuelve tamaño y preview del contenido.
+
+Requirió agregar `python-multipart` a `pyproject.toml` (dependencia real de FastAPI para `UploadFile`/`File(...)`, no estaba declarada — sin ella la app ni siquiera arrancaba).
+
+**Prueba real, con los tres servicios corriendo de verdad** (no simulada): `edi-ai-chat-backend` levantado en `:7005`, `ai-rag-service-manager` ya corriendo en `:7006` (bucket real `dev-documentos`), Java corriendo en `:7001` (no hizo falta para esta prueba puntual de storage).
+
+```
+POST /api/chat-ai/v1/storage-test/upload  (multipart, archivo de prueba)
+→ 200 {"success":true,"name":"p32-e2e-test.txt"}
+
+GET /api/chat-ai/v1/storage-test/download?name=p32-e2e-test.txt
+→ 200 {"name":"p32-e2e-test.txt","sizeBytes":61,"contentPreview":"contenido de prueba P-32 end-to-end ..."}
+```
+
+Confirmado además desde los logs reales de `ai-rag-service-manager`:
+```
+downloading p32-e2e-test.txt with metadata from bucket dev-documentos
+```
+
+`edi-ai-chat-backend` no mandó `bucket` en ningún momento — el fallback server-side (P-31) se ejercitó contra GCS real, no solo verificado a nivel de código. Esta es la primera prueba end-to-end genuina de la integración de este microservicio con `ai-rag-service-manager`.
+
 ## 4. Qué NO cambia / queda pendiente
 
-- No se creó ningún endpoint ni flujo de negocio nuevo que use `rag_service_client.py` — el trabajo fue dejar la plumbing lista y sin GCS directo, no inventar una feature de storage para este microservicio.
+- El controller de validación (`storage_test_controller.py`) es **temporal** — pensado para desaparecer cuando exista una feature de negocio real que use `rag_service_client.py`, no como superficie pública permanente.
 - El resto de la funcionalidad del repo (chat, proyectos, maturity models, cache) no tiene relación con storage y no se tocó.
-- Pendiente si el equipo decide: rotar las credenciales de `edward-creds.json` y purgarlas del historial de git, y hacer lo mismo con la password real de `.env` (`DATABASE_PASSWORD`) — reportado, no corregido, mismo criterio que los secretos de `edi-ai-proyectos-backend`.
+- `edward-creds.json` (credencial real de GCS) **ya fue eliminado** por el usuario, en este repo y en `edi-ai-proyectos-backend` (2026-08-13) — confirmado, ya no aparece en `git ls-files` de ninguno de los dos. Sigue pendiente si el equipo decide rotar la credencial subyacente y purgarla del historial de git (el archivo puede seguir siendo recuperable de commits anteriores).
+- `.env` (con `DATABASE_PASSWORD` real) sigue versionado en git en este repo — reportado, no corregido.
+- **Pendiente general (ver `pendientes.md`):** falta probar el flujo completo de punta a punta (frontend → Java/operator/chat-backend → `ai-rag-service-manager`) con todos los servicios corriendo juntos — lo hecho hasta ahora valida cada integración por separado, no el camino completo.
