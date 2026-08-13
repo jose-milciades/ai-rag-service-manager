@@ -1,12 +1,10 @@
-"""HTTP controller for document embedding and RAG query operations.
+"""HTTP controller for document embedding operations.
 
 Este archivo pertenece a la capa de API. Su rol es exponer endpoints HTTP para
-indexacion, consulta y recuperacion de contexto RAG.
+indexacion, consulta y recuperacion de contexto documental.
 
-No implementa logica de negocio compleja. Todo el trabajo real se delega a:
-
-- ``DocumentEmbeddingService`` para indexacion y busqueda documental
-- ``RAGAgent`` para construir respuestas basadas en contexto recuperado
+No implementa logica de negocio compleja. Todo el trabajo real se delega a
+``DocumentEmbeddingService``.
 """
 
 import logging
@@ -14,7 +12,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, status
 
-from app.api.dependencies.services import get_document_embedding_service, get_rag_agent
+from app.api.dependencies.services import get_document_embedding_service
 from app.schemas.embedding import (
     DeleteDocumentVecstoreRequest,
     DeleteDocumentVecstoreResponse,
@@ -24,8 +22,6 @@ from app.schemas.embedding import (
     ListDocumentsRequest,
     ListDocumentsResponse,
     OperationStatusResponse,
-    RagQueryRequest,
-    RagQueryResponse,
     SaveDocumentVecstoreRequest,
     SaveDocumentVecstoreResponse,
     SearchSimilarDocumentsRequest,
@@ -33,7 +29,6 @@ from app.schemas.embedding import (
     UniqueCodeDocumentResponse,
 )
 from app.services.embedding.document_embedding_service import DocumentEmbeddingService
-from app.services.rag.rag_agent import RAGAgent
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +39,6 @@ EmbeddingServiceDep = Annotated[
     DocumentEmbeddingService,
     Depends(get_document_embedding_service),
 ]
-RagAgentDep = Annotated[RAGAgent, Depends(get_rag_agent)]
 
 
 @router.post(
@@ -240,33 +234,4 @@ async def search_similar_documents(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error searching documents: {exc}",
-        ) from exc
-
-
-@router.post(
-    "/rag_query",
-    status_code=status.HTTP_200_OK,
-    summary="Answer a query using the configured RAG agent",
-)
-async def rag_query(
-    request: RagQueryRequest,
-    rag_agent: RagAgentDep,
-) -> RagQueryResponse:
-    """Resuelve una consulta usando el agente RAG configurado.
-
-    Este endpoint no hace retrieval directamente; solo traduce la solicitud HTTP
-    y delega en ``RAGAgent`` la recuperacion de contexto y armado de respuesta.
-    """
-    try:
-        result = rag_agent.answer_with_context(
-            question=request.question,
-            top_k=request.top_k,
-            department=request.department,
-        )
-        return RagQueryResponse(**result)
-    except Exception as exc:
-        logger.exception("error executing rag query")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error executing rag query: {exc}",
         ) from exc

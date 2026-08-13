@@ -112,7 +112,7 @@ Indexa un documento (texto extraído + chunking) en una colección vectorial.
 | `bucket` | `string \| null` | no | alternativa a `base64`/URL: descarga desde GCS |
 | `listParameters` | `array<object>` | no | metadata adicional; se aplana a un dict. Cada item acepta `{"key": ..., "value": ...}` **o** `{"code": ..., "value": ...}` (esta segunda forma es la que manda el micro Java origen vía `ParametersDTO`, ver `pendientes.md` P-21); cualquier otra forma se mezcla tal cual en la metadata |
 
-Fuente del contenido, en orden de precedencia: `base64` (si `hasDocumentBase64=true`) → `urlDownloadFile` → `bucket`. Si ninguno se provee, `500` (`ValueError: No document source was provided`).
+Fuente del contenido, en orden de precedencia: `base64` (si `hasDocumentBase64=true`) → `urlDownloadFile` → `bucket` (`bucket` es opcional incluso en este último caso: si se omite, usa `storage_default_bucket_name`; si tampoco hay default configurado, `500` con `ValueError: Bucket name is required for storage download`).
 
 **Respuesta 200** — `SaveDocumentVecstoreResponse`
 
@@ -220,31 +220,6 @@ Búsqueda semántica (embeddings reales, ver P-04/P-27) sobre una colección.
 
 **Respuesta 200** — `SearchSimilarDocumentsResponse`: `{ success, query, indexName, totalResults, results: [{ id, score, metadata, textPreview }], message? }` — mismo shape de item (`DocumentSummaryResponse`) que `list_documents`.
 
-### `POST /api/v1/embedding/rag_query`
-
-Recupera contexto relevante y lo devuelve junto con una respuesta placeholder. **No invoca ningún LLM** (ver `pendientes.md` P-05).
-
-**Body** — `RagQueryRequest`
-
-| Campo | Tipo | Requerido | Notas |
-|---|---|---|---|
-| `question` | `string` | sí | |
-| `topK` | `int` | no | 1–100, default `settings.rag_default_top_k` |
-| `department` | `string \| null` | no | filtro lógico por `payload.department` |
-
-**Respuesta 200** — `RagQueryResponse`
-
-```json
-{
-  "agent": "rag",
-  "question": "¿cómo se resetea la contraseña?",
-  "context": "[Document 1] (relevance: 0.812)\n...",
-  "sources": [ { "id": "...", "score": 0.812, "payload": { "...": "..." } } ],
-  "answer": "LLM integration pending. Retrieved context returned.",
-  "systemPrompt": "You are a knowledgeable assistant..."
-}
-```
-
 ---
 
 ## Storage — `/api/v1/storage`
@@ -282,7 +257,7 @@ Archivo: `app/api/routes/storage_controller.py`. **No documentado en el README h
 | `totalChunks` | `int` | sí | total esperado de partes |
 | `fileName` | `string` | sí | |
 | `name` | `string` | sí | |
-| `bucket` | `string` | sí | |
+| `bucket` | `string` | no | usa `storage_default_bucket_name` si se omite (2026-08-12 — antes era requerido; ver `pendientes.md`) |
 | `projectId` | `string` | sí | también determina la colección vectorial, igual que en `/upload` |
 | `idArea` | `string` | no | |
 | `codeTypeDocument` | `string` | no | mismo rol que en `/upload` |
@@ -302,7 +277,7 @@ Campo faltante o `chunkIndex`/`totalChunks` no numérico: `422` (validación aut
 
 Descarga un archivo como stream binario (`Content-Disposition: attachment`).
 
-**Query params:** `name` (requerido), `bucket` (requerido).
+**Query params:** `name` (requerido), `bucket` (opcional — usa `storage_default_bucket_name` si se omite).
 
 **Respuesta 200:** `StreamingResponse` con el contenido binario; `404` si el archivo no existe en el bucket.
 
@@ -310,7 +285,7 @@ Descarga un archivo como stream binario (`Content-Disposition: attachment`).
 
 Igual que `/get`, pero devuelve el contenido codificado en base64 dentro de un JSON en vez de un stream binario.
 
-**Query params:** `name` (requerido), `bucket` (requerido).
+**Query params:** `name` (requerido), `bucket` (opcional — usa `storage_default_bucket_name` si se omite).
 
 **Respuesta 200** — `FileResponse`
 
@@ -359,7 +334,6 @@ Requiere que `STORAGE_PUBLIC_BUCKET_NAME` esté configurado (ver `pendientes.md`
 | POST | `/api/v1/embedding/list_documents` | `embedding_controller.py` | embedding |
 | POST | `/api/v1/embedding/get_embeddings_by_unique_code` | `embedding_controller.py` | embedding |
 | POST | `/api/v1/embedding/search_similar_documents` | `embedding_controller.py` | embedding |
-| POST | `/api/v1/embedding/rag_query` | `embedding_controller.py` | embedding |
 | POST | `/api/v1/storage/upload` | `storage_controller.py` | storage |
 | POST | `/api/v1/storage/chunk` | `storage_controller.py` | storage |
 | GET | `/api/v1/storage/get` | `storage_controller.py` | storage |

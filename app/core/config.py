@@ -154,10 +154,6 @@ class Settings(BaseSettings):
         default="default_rag_collection",
         validation_alias=AliasChoices("RAG_DEFAULT_COLLECTION_NAME"),
     )
-    rag_agent_collection_name: str = Field(
-        default="company_knowledge_base",
-        validation_alias=AliasChoices("RAG_AGENT_COLLECTION_NAME"),
-    )
     rag_embedding_provider: str = Field(
         default="openai",
         validation_alias=AliasChoices("RAG_EMBEDDING_PROVIDER"),

@@ -110,34 +110,6 @@ class RAGService:
             filter_conditions=filter_conditions,
         )
 
-    def retrieve_context(
-        self,
-        query: str,
-        top_k: int | None = None,
-        filter_conditions: dict[str, Any] | None = None,
-    ) -> str:
-        """Convierte resultados de retrieval en un bloque de contexto legible."""
-        results = self.search(query=query, top_k=top_k, filter_conditions=filter_conditions)
-        context_parts = []
-        for index, result in enumerate(results, start=1):
-            context_parts.append(
-                f"[Document {index}] (relevance: {result['score']:.3f})\n{result['payload'].get('text', '')}\n"
-            )
-        return "\n".join(context_parts)
-
-    def answer_question(
-        self,
-        question: str,
-        top_k: int | None = None,
-    ) -> dict[str, Any]:
-        """Entrega contexto y fuentes para una pregunta cuando aun no hay LLM integrado."""
-        context = self.retrieve_context(question, top_k=top_k)
-        return {
-            "answer": "No LLM client provided. Returning retrieved context.",
-            "context": context,
-            "sources": self.search(question, top_k=top_k),
-        }
-
     def clear_collection(self) -> None:
         """Elimina completamente la coleccion vectorial actual."""
         self._vector_store.delete_collection(self.collection_name)

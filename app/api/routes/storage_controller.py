@@ -79,7 +79,7 @@ async def upload_chunk(
     total_chunks: int = Form(..., alias="totalChunks"),
     file_name: str = Form(..., alias="fileName"),
     name: str = Form(...),
-    bucket: str = Form(...),
+    bucket: str | None = Form(default=None),
     project_id: str = Form(..., alias="projectId"),
     id_area: str | None = Form(default=None, alias="idArea"),
     vectorization: VectorizationTriggerDep,
@@ -103,7 +103,7 @@ async def upload_chunk(
 async def get_file(
     *,
     name: str = Query(...),
-    bucket: str = Query(...),
+    bucket: str | None = Query(default=None),
     service: StorageServiceDep,
 ) -> StreamingResponse:
     file_bytes, content_type = await service.get_file(name=name, bucket=bucket)
@@ -123,7 +123,7 @@ async def get_file(
 async def get_file_byte(
     *,
     name: str = Query(...),
-    bucket: str = Query(...),
+    bucket: str | None = Query(default=None),
     service: StorageServiceDep,
 ) -> FileResponse:
     return await service.get_file_byte(name=name, bucket=bucket)

@@ -67,14 +67,6 @@ class SearchSimilarDocumentsRequest(BaseModel):
     metadata_filter: dict[str, Any] | None = Field(default=None, description="Filtros por metadata")
 
 
-class RagQueryRequest(BaseModel):
-    model_config = get_camel_case_config()
-
-    question: str = Field(..., description="Pregunta a responder")
-    top_k: int = Field(default_factory=lambda: get_settings().rag_default_top_k, ge=1, le=100)
-    department: str | None = Field(default=None, description="Filtro lógico por departamento")
-
-
 class EmbeddingChunkResponse(BaseModel):
     model_config = get_camel_case_config()
 
@@ -164,17 +156,6 @@ class SearchSimilarDocumentsResponse(BaseModel):
     total_results: int
     results: list[DocumentSummaryResponse] = Field(default_factory=list)
     message: str | None = None
-
-
-class RagQueryResponse(BaseModel):
-    model_config = get_camel_case_config()
-
-    agent: str
-    question: str
-    context: str
-    sources: list[dict[str, Any]] = Field(default_factory=list)
-    answer: str
-    system_prompt: str | None = None
 
 
 class OperationStatusResponse(BaseModel):

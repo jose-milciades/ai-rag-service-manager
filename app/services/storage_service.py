@@ -135,7 +135,7 @@ class StorageService:
         total_chunks: int,
         file_name: str,
         name: str,
-        bucket: str,
+        bucket: str | None,
         id_area: str | None,
         project_id: str,
         vectorization: VectorizationTrigger | None = None,
@@ -156,7 +156,7 @@ class StorageService:
         metadata_lines = [
             f"fileName={file_name}",
             f"name={name}",
-            f"bucket={bucket}",
+            f"bucket={bucket or ''}",
             f"idArea={id_area or ''}",
             f"projectId={project_id}",
             f"totalChunks={total_chunks}",
@@ -330,7 +330,7 @@ class StorageService:
         index_dir: Path,
         part_files: list[Path],
         name: str,
-        bucket: str,
+        bucket: str | None,
         file_name: str,
     ) -> tuple[bool, bytes]:
         """Arma el archivo final a partir de las partes recibidas, lo sube y limpia."""

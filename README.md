@@ -56,12 +56,11 @@ edi-ai-proyectos-backend (Java) ── sigue siendo el punto de entrada de la
    ├── GET  /api/v1/storage/getFileByte     │   de todo el sistema)
    ├── POST /api/v1/storage/public-upload  ─┘
    │
-   └── POST /api/v1/embedding/save_document_vecstore  ──┐
-       POST /api/v1/embedding/delete_index_vecstore     │  ai-rag-service-manager
-       POST /api/v1/embedding/list_documents            ├─ (único cliente del
+   └── POST /api/v1/embedding/save_document_vecstore      ──┐
+       POST /api/v1/embedding/delete_index_vecstore         │  ai-rag-service-manager
+       POST /api/v1/embedding/list_documents                ├─ (único cliente del
        POST /api/v1/embedding/get_embeddings_by_unique_code │  vector store de
-       POST /api/v1/embedding/search_similar_documents  │   todo el sistema)
-       POST /api/v1/embedding/rag_query                ─┘
+       POST /api/v1/embedding/search_similar_documents      ─┘   todo el sistema)
 ```
 
 Los embeddings siguen la misma regla que el storage: cualquier operación de indexación, borrado, listado o búsqueda semántica se consulta contra `ai-rag-service-manager` (`/api/v1/embedding/*`), no contra un motor de embeddings propio de Java ni de otro microservicio.
@@ -69,7 +68,7 @@ Los embeddings siguen la misma regla que el storage: cualquier operación de ind
 Estado real hoy en `edi-ai-proyectos-backend` (no es aspiracional, es lo verificado en este repo Java — ver `pendientes.md` P-10/P-11/P-20/P-21/P-22/P-23/P-24/P-25/P-26):
 
 - **Embeddings ya enrutados y activos, sin brechas conocidas:** los cuatro métodos de vectorización de `VectorStoreServiceImpl` (`saveEmbeddingFile`, `deleteIndexVecstore`, `deleteEmbeddingDocument`, `getListUniqueCodeDocuments`) llaman a `ai-rag-service-manager` (`app.rag-service.*`), no a `analysis-ai-service`. Los últimos dos se repuntaron una vez agregados los endpoints `delete_document`/`list_unique_code_documents` (`pendientes.md` P-22/P-23) — el campo `openaiConfig` quedó sin uso en esa clase y se eliminó.
-- **Storage todavía no cortado:** existe `RagServiceStorageClient` (implementación de `StorageService` contra `ai-rag-service-manager`), pero `StorageServiceImpl` (GCS local) sigue siendo el bean `@Primary` activo — el corte se hace cambiando el `@Qualifier` una vez que se pruebe en un ambiente real (no se activó de una vez porque no había forma de probarlo end-to-end desde este entorno).
+- **Storage ya cortado (2026-08-12):** `RagServiceStorageClient` es la única implementación de `StorageService`; `StorageServiceImpl` (GCS local) y sus beans de configuración (`StorageConfig`, `GoogleCloudConfig`) se eliminaron del repo. Verificado con `./gradlew compileJava`/`compileTestJava`/`assemble` (`BUILD SUCCESSFUL`); no verificado en runtime real (no se pudo levantar este microservicio Java desde el entorno de trabajo) — ver `pendientes.md` P-24.
 
 Detalle completo — mapeo de campos, incompatibilidades de contrato ya resueltas, checklist de migración de Java: ver [`integracion-java-storage.md`](./integracion-java-storage.md).
 
@@ -120,7 +119,6 @@ ai-rag-service-manager/
 │   │   ├── embedding/
 │   │   │   └── document_embedding_service.py
 │   │   ├── rag/
-│   │   │   ├── rag_agent.py
 │   │   │   └── rag_service.py
 │   │   └── storage_service.py
 │   └── main.py
@@ -148,13 +146,12 @@ ai-rag-service-manager/
 ### API
 
 - `health_controller.py`: endpoints de liveness y readiness.
-- `embedding_controller.py`: operaciones documentales y consultas RAG.
+- `embedding_controller.py`: operaciones documentales (indexación, borrado, listado, búsqueda semántica).
 
 ### Servicios
 
 - `DocumentEmbeddingService`: indexa documentos, lista resultados y ejecuta búsquedas.
 - `RAGService`: servicio central de chunking, embedding real e indexación/retrieval.
-- `RAGAgent`: facade orientado a consultas sobre una colección de conocimiento.
 
 ### Infraestructura
 
@@ -184,7 +181,7 @@ Exclusiones intencionales:
 - autenticación JWT/OAuth2;
 - OpenTelemetry;
 - colas como Kafka o RabbitMQ;
-- generación de respuesta vía LLM en `rag_query` (hoy retorna el contexto recuperado, no una respuesta generada — ver `pendientes.md` P-05).
+- generación de respuesta vía LLM (`rag_query`, decisión deliberada 2026-08-12 — el alcance de este microservicio es exclusivamente storage y embeddings; la síntesis con LLM queda a cargo de cada consumidor, ver `pendientes.md` P-05).
 
 ## Configuración
 
@@ -664,7 +661,6 @@ Pipeline mínimo en [`.github/workflows/ci.yml`](./.github/workflows/ci.yml): Ru
 - `POST /api/v1/embedding/list_documents`
 - `POST /api/v1/embedding/get_embeddings_by_unique_code`
 - `POST /api/v1/embedding/search_similar_documents`
-- `POST /api/v1/embedding/rag_query`
 - `POST /api/v1/storage/upload`
 - `POST /api/v1/storage/chunk`
 - `GET /api/v1/storage/get`

@@ -262,9 +262,7 @@ class DocumentEmbeddingService:
             return base64.b64decode(base64_content)
         if url_download_file:
             return self._storage_client.download_from_url(url_download_file)
-        if bucket:
-            return self._storage_client.download_from_bucket(file_name, bucket)
-        raise ValueError("No document source was provided")
+        return self._storage_client.download_from_bucket(file_name, bucket)
 
     @staticmethod
     def _normalize_parameters(list_parameters: list[dict[str, Any]]) -> dict[str, Any]:

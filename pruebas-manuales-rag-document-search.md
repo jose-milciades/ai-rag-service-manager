@@ -1,5 +1,7 @@
 # Pruebas manuales — `rag_document_search` (`edi-ai-operator` ↔ `ai-rag-service-manager`)
 
+**✅ Verificada end-to-end el 2026-08-12** contra los 3 servicios reales (`ai-rag-service-manager` puerto `7006`, `edi-ai-operator` puerto `7004`), con un documento PDF real (política de privacidad) y un proyecto real (`93`): upload+vectorización, retrieval confirmado, y `POST /rag-document-search/simulate` respondiendo `200` con una respuesta real del LLM basada en el contenido del documento. Ver `pendientes.md` P-28 (ronda 3 de verificación) y P-30 (bug encontrado y corregido en el camino).
+
 Guía paso a paso con `curl` para probar la integración de punta a punta: subir y vectorizar un documento en `ai-rag-service-manager`, y luego consultarlo vía la API de simulación de `edi-ai-operator` (`POST /rag-document-search/simulate`, ver `integracion-operator-rag.md` sección 3.5).
 
 **Ninguna llamada de esta guía necesita header `Authorization`** — ni `ai-rag-service-manager` ni el endpoint de simulación de `edi-ai-operator` implementan autenticación (ver `pendientes.md` P-13 en `ai-rag-service-manager`).

@@ -6,7 +6,6 @@ from app.infrastructure.clients.storage_config import StorageConfig
 from app.infrastructure.embeddings.embedding_provider import EmbeddingProvider
 from app.infrastructure.vector_store.vector_store_manager import VectorStoreManager
 from app.services.embedding.document_embedding_service import DocumentEmbeddingService
-from app.services.rag.rag_agent import RAGAgent
 from app.services.storage_service import StorageService
 
 
@@ -49,14 +48,4 @@ def get_storage_service() -> StorageService:
         storage_client=get_storage_client(),
         document_embedding_service=get_document_embedding_service(),
         settings=get_settings(),
-    )
-
-
-@lru_cache
-def get_rag_agent() -> RAGAgent:
-    settings = get_settings()
-    return RAGAgent(
-        collection_name=settings.rag_agent_collection_name,
-        vector_store_manager=get_vector_store_manager(),
-        embedding_provider=get_embedding_provider(),
     )
