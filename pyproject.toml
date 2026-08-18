@@ -23,6 +23,12 @@ dependencies = [
   "hvac>=2.4.0",
   "pymilvus>=2.5.0,<4.0.0",
   "openai>=1.50.0,<2.0.0",
+  # Extraccion real de texto de PDF (ver pendientes.md P-39) -- misma
+  # libreria que usa edi-ai-analysis-ai para el caso de PDFs con texto real
+  # (ReadTextBase64._read_text_pdf_without_images). No se replica el resto
+  # de ese pipeline (deteccion de PDF-solo-imagenes + OCR via Google Vision,
+  # DOC/PPT/XLS via Spire) -- fuera de alcance de este fix puntual.
+  "pdfplumber>=0.11.0,<1.0.0",
   # numpy>=2.5 empaqueta stubs con sintaxis PEP 695 ("type X = ...") sin
   # condicionar por version, incompatible con python_version=3.11 de mypy
   # (ver comentario en [tool.mypy] mas abajo) -- se detecto al agregar

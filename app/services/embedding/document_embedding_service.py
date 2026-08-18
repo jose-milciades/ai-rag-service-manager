@@ -13,8 +13,11 @@ Su papel principal es orquestar:
 """
 
 import base64
+import io
 import logging
 from typing import Any
+
+import pdfplumber
 
 from app.core.config import Settings
 from app.infrastructure.clients.storage_client import StorageClient
@@ -459,5 +462,31 @@ class DocumentEmbeddingService:
         if extension in {"txt", "md", "json", "csv", "py", "yaml", "yml", "html", "xml"}:
             return file_content.decode("utf-8", errors="ignore")
         if extension == "pdf":
-            return file_content.decode("latin-1", errors="ignore")
+            return DocumentEmbeddingService._extract_text_from_pdf(file_content)
         return file_content.decode("utf-8", errors="ignore")
+
+    @staticmethod
+    def _extract_text_from_pdf(file_content: bytes) -> str:
+        """Extrae el texto real de un PDF con contenido de texto (no escaneado).
+
+        Antes de esto, un PDF se trataba con
+        ``file_content.decode("latin-1", errors="ignore")`` -- decodificaba
+        los bytes crudos del archivo (streams comprimidos con FlateDecode,
+        tabla xref, anotaciones) como si fueran texto plano, en vez de
+        extraer el contenido real de las paginas. Confirmado real con una
+        prueba end-to-end (ver pendientes.md P-39): el texto indexado eran
+        objetos PDF binarios, no los parrafos del documento.
+
+        Usa `pdfplumber`, la misma libreria que usa `edi-ai-analysis-ai`
+        (`ReadTextBase64._read_text_pdf_without_images`) para el caso de
+        PDFs con texto real -- se mantiene el mismo separador de pagina
+        (``*page-break*``) por consistencia con ese formato ya conocido por
+        el resto del sistema. **No** se replica el resto de ese pipeline
+        (deteccion de PDF-solo-imagenes + OCR via Google Vision para
+        escaneados, ni DOC/PPT/XLS via Spire) -- fuera de alcance de este
+        fix puntual; un PDF escaneado (sin texto real en sus paginas) hoy
+        simplemente produce paginas vacias, no un error.
+        """
+        with pdfplumber.open(io.BytesIO(file_content)) as pdf:
+            pages = [page.extract_text() or "" for page in pdf.pages]
+        return "\n*page-break*\n".join(pages)
