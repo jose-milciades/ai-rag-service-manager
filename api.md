@@ -92,7 +92,7 @@ Readiness real: devuelve `503` si alguna integración marcada como **crítica** 
 
 ## Embedding — `/api/v1/embedding`
 
-Archivo: `app/api/routes/embedding_controller.py`. Todos los endpoints son `POST` con body JSON, campos en `camelCase` (salvo `list_unique_code_documents`, ver abajo). Motor subyacente: `RAGService` (`app/services/rag/rag_service.py`), con embeddings reales — API de OpenAI por defecto o `sentence-transformers` local (`RAG_EMBEDDING_PROVIDER=openai|local`, ver `pendientes.md` P-04/P-27) — sobre `VECTOR_DB_TYPE=memory|milvus` (default en memoria; Milvus real disponible, ver `pendientes.md` P-08).
+Archivo: `app/api/routes/embedding_controller.py`. Todos los endpoints son `POST` con body JSON, campos en `camelCase` (salvo `list_unique_code_documents`, ver abajo). Motor subyacente: `RAGService` (`app/services/rag/rag_service.py`), con embeddings reales vía API de OpenAI (único proveedor soportado, ver `pendientes.md` P-04/P-19) sobre `VECTOR_DB_TYPE=memory|milvus` (default en memoria; Milvus real disponible, ver `pendientes.md` P-08).
 
 ### `POST /api/v1/embedding/save_document_vecstore`
 

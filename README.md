@@ -155,7 +155,7 @@ ai-rag-service-manager/
 
 ### Infraestructura
 
-- `EmbeddingProvider`: genera embeddings reales, con dos backends seleccionables por `RAG_EMBEDDING_PROVIDER` — `openai` (API real de OpenAI, default; ver `pendientes.md` P-27) o `local` (`sentence-transformers`, vía `pymilvus.model`). Se construye una sola vez y se comparte entre colecciones.
+- `EmbeddingProvider`: genera embeddings reales vía la API de OpenAI (único proveedor soportado — decisión de negocio, ver `pendientes.md` P-19; el backend local `sentence-transformers` que existía antes fue removido del todo). Se construye una sola vez y se comparte entre colecciones.
 - `VectorStoreManager`: facade para el backend vectorial configurado (`VECTOR_DB_TYPE`).
 - `InMemoryVectorStore`: adapter en memoria, default para desarrollo local sin dependencias externas.
 - `MilvusVectorStore`: adapter real contra Milvus (`pymilvus.MilvusClient`) cuando `VECTOR_DB_TYPE=milvus` — colección con `id` + `vector` + un campo `payload` JSON que preserva la metadata libre que ya usa el resto de la app.
@@ -171,8 +171,8 @@ Incluido en esta versión:
 - configuración con `pydantic-settings`;
 - readiness con estado de Config Server y Eureka;
 - logging centralizado con Correlation ID;
-- embeddings reales, vía API de OpenAI por defecto o `sentence-transformers` local (`RAG_EMBEDDING_PROVIDER=openai|local`) e indexación/retrieval semántico contra memoria o Milvus (`VECTOR_DB_TYPE=memory|milvus`);
-- Docker listo para ejecución local, con el modelo de embeddings pre-descargado en el build.
+- embeddings reales vía API de OpenAI (`RAG_EMBEDDING_PROVIDER=openai`, único proveedor soportado) e indexación/retrieval semántico contra memoria o Milvus (`VECTOR_DB_TYPE=memory|milvus`);
+- Docker listo para ejecución local.
 
 Exclusiones intencionales:
 
@@ -201,7 +201,7 @@ Notas operativas:
 
 - `SPRING_CLOUD_CONFIG_URI` se consulta solo al arrancar la aplicación;
 - `VECTOR_DB_TYPE=milvus` requiere un Milvus real alcanzable en `MILVUS_HOST:MILVUS_PORT`; con `memory` (default) no hace falta nada externo;
-- `RAG_EMBEDDING_PROVIDER` selecciona el backend de embeddings — `openai` (default, requiere `OPENAI_API_KEY`) o `local` (`sentence-transformers`, sin red ni key) — ver `pendientes.md` P-27. Se resuelve/carga una sola vez al arrancar (`EmbeddingProvider`), no por request. Con `local`, cambiar `RAG_EMBEDDING_MODEL` implica reconstruir la imagen Docker para no depender de red en el arranque (ver sección Docker); con `openai` no aplica, es una API remota.
+- `RAG_EMBEDDING_PROVIDER`: único valor soportado `openai` (requiere `OPENAI_API_KEY`) — decisión de negocio, ver `pendientes.md` P-19. Se resuelve/carga una sola vez al arrancar (`EmbeddingProvider`), no por request.
 
 ## Ejecutar localmente
 
@@ -679,9 +679,9 @@ Análisis (sin implementar, ver `pendientes.md` P-28) para que `edi-ai-operator`
 
 La imagen corre como usuario no-root (`appuser`, uid 1000) y aplica `apt-get upgrade` en el build para tomar parches de seguridad del SO disponibles al momento de construir (ver §26/§27 arriba y `pendientes.md` P-18 para el detalle de vulnerabilidades de imagen aún pendientes de resolver). El build usa `.dockerignore` para no copiar `.venv`, `.git`, secretos locales ni documentación interna al contexto.
 
-El build también pre-descarga el modelo local de embeddings por defecto (`sentence-transformers/all-MiniLM-L6-v2`) y fija `HF_HUB_OFFLINE=1` para el runtime, por si se usa `RAG_EMBEDDING_PROVIDER=local` — el default real (`openai`) es una API remota y no usa nada de esto. Con `local`, si cambias `RAG_EMBEDDING_MODEL` a otro modelo sin reconstruir la imagen, el arranque va a intentar descargarlo igual — falla si no hay salida a internet, porque `HF_HUB_OFFLINE=1` bloquea el fallback online. El backend local agrega ~1.6GB al `.venv` (torch CPU-only + sentence-transformers + pymilvus) — ver `pendientes.md` P-19 si el tamaño de imagen es una preocupación.
+Los embeddings se generan vía la API de OpenAI (único proveedor soportado, decisión de negocio — ver `pendientes.md` P-19); no hay modelo local que pre-descargar ni dependencias de ML (`torch`/`sentence-transformers`) en la imagen, que es justo lo que resolvió ese pendiente (imagen notablemente más liviana).
 
-`appuser` se crea con `--no-create-home`, así que `HOME`, `UV_CACHE_DIR` y `HF_HOME` se fijan explícitamente dentro de `/app` (que sí queda con permisos de escritura para ese usuario); sin esto, `uv run` falla al no poder crear su cache en un `$HOME` inexistente.
+`appuser` se crea con `--no-create-home`, así que `HOME` y `UV_CACHE_DIR` se fijan explícitamente dentro de `/app` (que sí queda con permisos de escritura para ese usuario); sin esto, `uv run` falla al no poder crear su cache en un `$HOME` inexistente.
 
 Sin Vault (usa `.env`, `USE_VAULT_CONFIG=false` como en el default de `.env.example`):
 

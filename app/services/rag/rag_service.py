@@ -54,14 +54,12 @@ class RAGService:
         settings: Settings,
         vector_store_manager: VectorStoreManager,
         embedding_provider: EmbeddingProvider,
-        collection_name: str | None = None,
+        collection_name: str,
     ) -> None:
         self._settings = settings
         self._vector_store = vector_store_manager
         self._embedding_provider = embedding_provider
-        self.collection_name = _sanitize_collection_name(
-            collection_name or settings.rag_default_collection_name
-        )
+        self.collection_name = _sanitize_collection_name(collection_name)
         self.partition_name = _sanitize_collection_name(settings.rag_environment)
         self.embedding_model = embedding_provider.model_name
         self._vector_size = embedding_provider.dim

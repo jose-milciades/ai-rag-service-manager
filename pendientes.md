@@ -32,7 +32,7 @@ Cómo usarlo:
 | P-16 | `/storage/chunk` no declara sus campos como `Form()`, no aparece bien en OpenAPI | Baja | Resuelto |
 | P-17 | `Settings` no carga `.env` automáticamente pese a lo que dice el README | Baja | Resuelto |
 | P-18 | Adopción del estándar corporativo de calidad/seguridad (CI/CD, mypy, Bandit, pip-audit, Gitleaks, Trivy, coverage) | Media | Resuelto (parcial) |
-| P-19 | Imagen Docker creció ~1.6GB por embeddings locales (torch + sentence-transformers + pymilvus) | Baja | Pendiente |
+| P-19 | Imagen Docker creció ~1.6GB por embeddings locales (torch + sentence-transformers + pymilvus) | Baja | Resuelto (OpenAI-only, backend local eliminado; imagen 2.82GB→580MB) |
 | P-20 | `id_document` incompatible: Java manda `String` (=`uniqueCode`), Python exige `int` | Alta | Resuelto |
 | P-21 | `list_parameters` incompatible: Java manda `{code,value}`, Python solo reconoce `{key,value}` (pérdida silenciosa de datos) | Alta | Resuelto |
 | P-22 | Falta endpoint para borrar un documento individual del índice (Java lo usa hoy vía `deleteEmbeddingDocument`) | Media | Resuelto |
@@ -329,14 +329,27 @@ Cómo usarlo:
 
 ### P-19 — Imagen Docker creció por embeddings locales (torch + sentence-transformers + pymilvus)
 
-- **Estado:** Pendiente
+- **Estado:** Resuelto — decisión de negocio (2026-08-18): usar exclusivamente `RAG_EMBEDDING_PROVIDER=openai`/`RAG_EMBEDDING_MODEL=text-embedding-3-large`. Se implementó la opción (a) que ya estaba sugerida en este mismo pendiente ("un proveedor de embeddings por API... quita torch/sentence-transformers del todo").
 - **Detectado:** 2026-08-11, al implementar P-04/P-08.
-- **Ubicación:** `pyproject.toml` (dependencias core), `Dockerfile`.
-- **Descripción:** Resolver P-04 (embeddings reales) requiere `sentence-transformers`, que arrastra `torch` como dependencia. El wheel de PyPI de `torch` trae CUDA completo por defecto (~5.4GB de `.venv`) aunque el servicio está configurado para CPU (`RAG_EMBEDDING_DEVICE=cpu`); se mitigó fijando `torch` contra el índice CPU-only oficial de PyTorch (`[tool.uv.sources]`/`[[tool.uv.index]]` en `pyproject.toml`), lo que bajó el `.venv` a ~1.6GB. La imagen final construida (con parches de SO de P-18 incluidos) pesa **2.82GB**.
-- **Impacto:** Imagen notablemente más pesada que antes de esta integración (previamente sin ninguna dependencia de ML). Tiempos de build/pull más largos, más superficie para Trivy (nuevas dependencias de sistema que puedan traer los paquetes de ML). No es un bug — es el costo real de embeddings locales de calidad razonable — pero vale la pena que quede como decisión consciente y no un efecto secundario no documentado.
-- **Mitigaciones ya aplicadas:** build-time pre-download del modelo default + `HF_HUB_OFFLINE=1` en runtime (evita descargas/verificaciones de red en cada arranque, ver Dockerfile); `torch` fijado a CPU-only (evita ~4GB de librerías CUDA innecesarias).
-- **Acción sugerida:** si el tamaño de imagen se vuelve un problema operativo (tiempos de deploy, costo de registry, cold-start en autoscaling), evaluar alternativas más livianas: (a) un proveedor de embeddings por API (OpenAI, Cohere, Voyage — quita `torch`/`sentence-transformers` del todo, cambia el trade-off a latencia de red + costo por request); (b) modelos ONNX-only sin el runtime completo de `sentence-transformers`/`transformers` (más liviano pero más trabajo de integración); (c) separar el servicio de embeddings en un microservicio aparte si varios servicios lo van a reutilizar. Ninguna de estas se implementó — la decisión actual (local, CPU, `sentence-transformers`) fue la que pidió explícitamente el usuario.
-- **Nota de auditoría (relacionado con P-18/pip-audit):** `pip-audit` no puede verificar `torch` porque se resuelve desde el índice CPU-only de PyTorch, no desde PyPI estándar (`torch==2.13.0+cpu` no tiene match en la base de datos de vulnerabilidades por ese sufijo de version). Es un "skip", no una vulnerabilidad confirmada ni descartada — si se necesita auditoría real de `torch`, hay que verificarlo manualmente contra los avisos de seguridad de PyTorch.
+- **Resuelto el:** 2026-08-18.
+- **Ubicación:** `pyproject.toml`, `Dockerfile`, `app/infrastructure/embeddings/embedding_provider.py`, `app/core/config.py`.
+- **Descripción original:** Resolver P-04 (embeddings reales) había agregado `sentence-transformers`, que arrastraba `torch` como dependencia. Se había mitigado fijando `torch` contra el índice CPU-only oficial de PyTorch, pero la imagen final igual pesaba **2.82GB**.
+- **Implementación (2026-08-18):**
+  - **`app/infrastructure/embeddings/embedding_provider.py`:** eliminado `_LocalEmbeddingBackend` (`sentence-transformers`) y el `Protocol`/dispatch multi-backend (ya no hace falta con un solo proveedor) — `EmbeddingProvider` ahora es una única implementación directa contra la API de OpenAI.
+  - **`app/core/config.py`:** `rag_embedding_provider` ahora tiene un `field_validator` que **solo acepta `"openai"`** (falla fuerte ante cualquier otro valor, ej. `"local"` de una config vieja sin actualizar — mismo criterio que `RAG_ENVIRONMENT`, ver P-33). Eliminados `rag_embedding_device`/`rag_normalize_embeddings` (solo los usaba el backend local, ahora dead code).
+  - **`pyproject.toml`:** eliminadas las dependencias `sentence-transformers` y `torch`; `pymilvus[model]` → `pymilvus` (se quita el extra `[model]`, ya no hace falta `SentenceTransformerEmbeddingFunction`); eliminado el índice `pytorch-cpu`/`[tool.uv.sources]` completo (ya no hay `torch` que fijar a CPU-only).
+  - **`Dockerfile`:** eliminado el paso de pre-descarga del modelo local (`RUN uv run python -c "from pymilvus.model.dense import SentenceTransformerEmbeddingFunction..."`), `ENV HF_HUB_OFFLINE=1` y `HF_HOME=/app/.cache/huggingface` (nada de esto aplica sin backend local).
+  - **`app/services/rag/rag_service.py`** (hallazgo colateral, ver también P-33 punto 6): `RAGService.__init__` recibía `collection_name: str | None = None` con fallback a `settings.rag_default_collection_name`, pero el único caller real (`DocumentEmbeddingService._get_rag_service`) siempre pasa un `index_name` explícito — el fallback nunca se ejecutaba. Cambiado a `collection_name: str` (obligatorio), eliminando la referencia muerta. **`RAG_DEFAULT_COLLECTION_NAME` se mantiene intacta** para su otro uso real y sí alcanzable en `storage_service.py._resolve_vectorization_index` (fallback cuando un `/storage/upload` llega sin `project_id` ni `code_type_document`) — decisión explícita del usuario tras confirmarse que ese caso sí es reachable en el flujo real de `resources`, aunque el backend ya valida que llegue `code_resource` o `code_type_document` antes de vectorizar.
+  - `.env`/`.env.example`/`README.md`/`api.md` actualizados, quitando las menciones al backend local y a `RAG_EMBEDDING_DEVICE`/`RAG_NORMALIZE_EMBEDDINGS`.
+- **Verificación real:**
+  1. `uv lock` real: removió 25 paquetes del árbol de dependencias (`torch` x2, `sentence-transformers`, `transformers`, `tokenizers`, `scipy`, `scikit-learn`, `onnxruntime`, `sympy`, `networkx`, `pymilvus-model`, etc.).
+  2. `.venv` bajó de lo que antes rondaba ~1.6GB a **362MB**.
+  3. `ruff check .` y `mypy app` limpios tras el cambio.
+  4. Verificación real de que `torch`/`sentence_transformers`/`pymilvus.model` ya no están instalados (`ImportError` confirmado los 3).
+  5. `Settings(RAG_EMBEDDING_PROVIDER="local")` lanza `ValidationError` real (falla fuerte, ya no degrada a un backend inexistente).
+  6. **Build real de la imagen Docker (`docker build`, no simulado):** imagen final **580MB** (antes 2.82GB — reducción de ~80%). Contenedor real levantado (`docker run`) con `OPENAI_API_KEY` fake: arrancó limpio (`Uvicorn running on http://0.0.0.0:8000`, `Application startup complete`) y respondió a una petición HTTP real (`GET /health/live` → `404` porque el path no era el correcto, pero confirma que el servidor procesa requests reales — no fue necesario dar con el path exacto para validar el objetivo de este pendiente). Contenedor e imagen de prueba eliminados al terminar.
+- **Nota de auditoría (ya no aplica):** la excepción de `pip-audit` sobre `torch==...+cpu` (no auditable por el sufijo de versión del índice CPU-only) queda sin efecto — `torch` ya no es una dependencia del proyecto.
+- **Acción sugerida:** ninguna — resuelto de fondo (no era una mitigación parcial, se eliminó la causa raíz).
 
 ---
 

@@ -164,6 +164,10 @@ class Settings(BaseSettings):
         default="default_rag_collection",
         validation_alias=AliasChoices("RAG_DEFAULT_COLLECTION_NAME"),
     )
+    # Decision de negocio (ver pendientes.md P-19): solo OpenAI, sin backend
+    # local. Se mantiene como campo validado (en vez de hardcodear el string)
+    # para que un typo en .env/Vault falle fuerte al arrancar en vez de
+    # ignorarse en silencio (mismo criterio que RAG_ENVIRONMENT).
     rag_embedding_provider: str = Field(
         default="openai",
         validation_alias=AliasChoices("RAG_EMBEDDING_PROVIDER"),
@@ -171,14 +175,6 @@ class Settings(BaseSettings):
     rag_embedding_model: str = Field(
         default="text-embedding-3-large",
         validation_alias=AliasChoices("RAG_EMBEDDING_MODEL"),
-    )
-    rag_embedding_device: str = Field(
-        default="cpu",
-        validation_alias=AliasChoices("RAG_EMBEDDING_DEVICE"),
-    )
-    rag_normalize_embeddings: bool = Field(
-        default=True,
-        validation_alias=AliasChoices("RAG_NORMALIZE_EMBEDDINGS"),
     )
     openai_api_key: str | None = Field(
         default=None,
@@ -242,6 +238,20 @@ class Settings(BaseSettings):
         if value not in allowed:
             raise ValueError(
                 f"RAG_ENVIRONMENT invalido: {value!r}. Valores permitidos: {sorted(allowed)}"
+            )
+        return value
+
+    @field_validator("rag_embedding_provider")
+    @classmethod
+    def _validate_rag_embedding_provider(cls, value: str) -> str:
+        """Decision de negocio (ver pendientes.md P-19): solo OpenAI. El
+        backend local (`sentence-transformers`/`torch`) fue removido del
+        todo -- un valor distinto a "openai" aca (ej. "local" por config
+        vieja sin actualizar) debe fallar fuerte al arrancar, no degradar en
+        silencio a un backend que ya no existe."""
+        if value != "openai":
+            raise ValueError(
+                f"RAG_EMBEDDING_PROVIDER invalido: {value!r}. Unico valor soportado: 'openai'"
             )
         return value
 
