@@ -113,8 +113,11 @@ class DocumentEmbeddingService:
         }
 
     def delete_index(self, index_name: str) -> dict[str, Any]:
-        """Elimina la coleccion vectorial completa y limpia cache local de servicios."""
-        self._vector_store_manager.delete_collection(index_name)
+        """Elimina los datos de este proyecto para el ambiente actual (particion,
+        ver pendientes.md P-33) y limpia cache local de servicios. No afecta
+        otros ambientes que compartan la misma coleccion/proyecto."""
+        rag_service = self._get_rag_service(index_name)
+        rag_service.clear_collection()
         self._rag_services.pop(index_name, None)
         return {
             "success": True,
@@ -143,7 +146,9 @@ class DocumentEmbeddingService:
         """
         rag_service = self._get_rag_service(namespace)
         records = self._vector_store_manager.list_records(
-            rag_service.collection_name, limit=self._settings.rag_unique_code_list_limit
+            rag_service.collection_name,
+            limit=self._settings.rag_unique_code_list_limit,
+            partition_name=rag_service.partition_name,
         )
 
         seen_codes: set[str] = set()
@@ -173,8 +178,12 @@ class DocumentEmbeddingService:
         metadata_filter: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Lista documentos agrupando chunks por documento logico."""
+        rag_service = self._get_rag_service(index_name)
         records = self._vector_store_manager.list_records(
-            index_name, limit=limit * 10, filter_conditions=metadata_filter
+            rag_service.collection_name,
+            limit=limit * 10,
+            filter_conditions=metadata_filter,
+            partition_name=rag_service.partition_name,
         )
 
         documents: dict[str, dict[str, Any]] = {}
@@ -203,10 +212,12 @@ class DocumentEmbeddingService:
 
     def get_embeddings_by_unique_code(self, index_name: str, unique_code: str) -> dict[str, Any]:
         """Recupera todos los chunks indexados para un ``unique_code``."""
+        rag_service = self._get_rag_service(index_name)
         records = self._vector_store_manager.list_records(
-            index_name,
+            rag_service.collection_name,
             limit=self._settings.rag_max_embeddings_per_document,
             filter_conditions={"unique_code": unique_code},
+            partition_name=rag_service.partition_name,
         )
         records.sort(key=lambda item: item["payload"].get("chunk_index", 0))
 
@@ -383,10 +394,12 @@ class DocumentEmbeddingService:
         chunk_index = payload.get("chunk_index")
         if unique_code is None or chunk_index is None:
             return None
+        rag_service = self._get_rag_service(index_name)
         records = self._vector_store_manager.list_records(
-            index_name,
+            rag_service.collection_name,
             limit=self._settings.rag_max_embeddings_per_document,
             filter_conditions={"unique_code": unique_code},
+            partition_name=rag_service.partition_name,
         )
         chunk_count = self._settings.rag_adjacent_chunk_count
         target_range = range(int(chunk_index), int(chunk_index) + chunk_count + 1)

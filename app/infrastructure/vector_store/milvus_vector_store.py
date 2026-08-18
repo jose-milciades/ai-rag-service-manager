@@ -99,12 +99,21 @@ class MilvusVectorStore(VectorStoreInterface):
             index_params=index_params,
         )
 
+    def create_partition(self, collection_name: str, partition_name: str) -> None:
+        """Crea la particion (ambiente, ver pendientes.md P-33) si aun no existe."""
+        client = self._get_client()
+        if client.has_partition(collection_name=collection_name, partition_name=partition_name):
+            return
+        logger.info("creating milvus partition %s.%s", collection_name, partition_name)
+        client.create_partition(collection_name=collection_name, partition_name=partition_name)
+
     def insert_vectors(
         self,
         collection_name: str,
         vectors: list[list[float]],
         payloads: list[dict[str, Any]] | None = None,
         ids: list[str] | None = None,
+        partition_name: str | None = None,
     ) -> None:
         """Inserta vectores y payloads; hace flush para que sean buscables de inmediato."""
         if not vectors:
@@ -119,7 +128,7 @@ class MilvusVectorStore(VectorStoreInterface):
             {_ID_FIELD: record_id, _VECTOR_FIELD: vector, _PAYLOAD_FIELD: payload}
             for record_id, vector, payload in zip(ids, vectors, payloads)
         ]
-        client.insert(collection_name=collection_name, data=data)
+        client.insert(collection_name=collection_name, data=data, partition_name=partition_name or "")
         client.flush(collection_name)
 
     def search(
@@ -128,6 +137,7 @@ class MilvusVectorStore(VectorStoreInterface):
         query_vector: list[float],
         top_k: int = 5,
         filter_conditions: dict[str, Any] | None = None,
+        partition_name: str | None = None,
     ) -> list[dict[str, Any]]:
         """Busqueda por similitud vectorial nativa de Milvus."""
         client = self._get_client()
@@ -142,6 +152,7 @@ class MilvusVectorStore(VectorStoreInterface):
             limit=top_k,
             filter=_build_filter_expression(filter_conditions),
             output_fields=[_PAYLOAD_FIELD],
+            partition_names=[partition_name] if partition_name else None,
         )
         hits = results[0] if results else []
         return [
@@ -158,6 +169,7 @@ class MilvusVectorStore(VectorStoreInterface):
         collection_name: str,
         limit: int = 100,
         filter_conditions: dict[str, Any] | None = None,
+        partition_name: str | None = None,
     ) -> list[dict[str, Any]]:
         """Lista registros crudos via query() (sin busqueda vectorial)."""
         client = self._get_client()
@@ -166,6 +178,7 @@ class MilvusVectorStore(VectorStoreInterface):
             filter=_build_filter_expression(filter_conditions),
             output_fields=[_ID_FIELD, _VECTOR_FIELD, _PAYLOAD_FIELD],
             limit=limit,
+            partition_names=[partition_name] if partition_name else None,
         )
         return [
             {
@@ -177,12 +190,28 @@ class MilvusVectorStore(VectorStoreInterface):
         ]
 
     def delete_collection(self, collection_name: str) -> None:
-        """Elimina la coleccion si existe."""
+        """Elimina la coleccion completa (todas sus particiones/ambientes) si existe."""
         client = self._get_client()
         if client.has_collection(collection_name):
             client.drop_collection(collection_name)
 
-    def delete_records(self, collection_name: str, filter_conditions: dict[str, Any]) -> int:
+    def delete_partition(self, collection_name: str, partition_name: str) -> None:
+        """Elimina solo esta particion (ambiente), sin afectar otras particiones
+        de la misma coleccion (ver pendientes.md P-33)."""
+        client = self._get_client()
+        if not client.has_collection(collection_name):
+            return
+        if not client.has_partition(collection_name=collection_name, partition_name=partition_name):
+            return
+        client.release_partitions(collection_name=collection_name, partition_names=[partition_name])
+        client.drop_partition(collection_name=collection_name, partition_name=partition_name)
+
+    def delete_records(
+        self,
+        collection_name: str,
+        filter_conditions: dict[str, Any],
+        partition_name: str | None = None,
+    ) -> int:
         """Elimina registros que cumplan el filtro indicado; retorna cuantos se borraron."""
         client = self._get_client()
         if not client.has_collection(collection_name):
@@ -190,6 +219,7 @@ class MilvusVectorStore(VectorStoreInterface):
         result = client.delete(
             collection_name=collection_name,
             filter=_build_filter_expression(filter_conditions),
+            partition_name=partition_name,
         )
         # Igual que en insert_vectors: sin flush, el borrado no es visible de
         # inmediato para queries subsiguientes (ver comentario de insert_vectors).

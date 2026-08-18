@@ -36,18 +36,18 @@ def _sanitize_collection_name(name: str) -> str:
     return sanitized
 
 
-def _resolve_collection_name(prefix: str, collection_name: str) -> str:
-    cleaned_name = _sanitize_collection_name(collection_name)
-    cleaned_prefix = _sanitize_collection_name(prefix.strip()) if prefix.strip() else ""
-    if not cleaned_prefix:
-        return cleaned_name
-    if cleaned_name == cleaned_prefix or cleaned_name.startswith(f"{cleaned_prefix}_"):
-        return cleaned_name
-    return f"{cleaned_prefix}_{cleaned_name}"
-
-
 class RAGService:
-    """Servicio central para chunking, embedding, indexacion y retrieval."""
+    """Servicio central para chunking, embedding, indexacion y retrieval.
+
+    Coleccion Milvus = proyecto solo, sin concatenar (ej. ``project_127``).
+    Particion Milvus = ambiente (``Settings.rag_environment``, ej.
+    ``edi_dev``) dentro de esa coleccion -- ver pendientes.md P-33. Asi
+    varios ambientes (edi-local/edi-dev/edi-stage/edi-prod) que comparten la
+    misma instancia Milvus pueden convivir en la misma coleccion por
+    proyecto sin mezclar sus datos, y son administrables por separado
+    (browsear/borrar un ambiente puntual sin tocar los demas) en vez de
+    quedar todo concatenado en un unico nombre de coleccion.
+    """
 
     def __init__(
         self,
@@ -59,16 +59,17 @@ class RAGService:
         self._settings = settings
         self._vector_store = vector_store_manager
         self._embedding_provider = embedding_provider
-        self.collection_name = _resolve_collection_name(
-            settings.rag_collection_name_prefix,
-            collection_name or settings.rag_default_collection_name,
+        self.collection_name = _sanitize_collection_name(
+            collection_name or settings.rag_default_collection_name
         )
+        self.partition_name = _sanitize_collection_name(settings.rag_environment)
         self.embedding_model = embedding_provider.model_name
         self._vector_size = embedding_provider.dim
         if not self._vector_store.collection_exists(self.collection_name):
             self._vector_store.create_collection(
                 self.collection_name, vector_size=self._vector_size
             )
+        self._vector_store.create_partition(self.collection_name, self.partition_name)
 
     def index_documents(
         self,
@@ -114,7 +115,10 @@ class RAGService:
 
         vectors = self._embedding_provider.embed_documents(texts_to_index)
         self._vector_store.insert_vectors(
-            self.collection_name, vectors=vectors, payloads=metadata_to_index
+            self.collection_name,
+            vectors=vectors,
+            payloads=metadata_to_index,
+            partition_name=self.partition_name,
         )
         return len(texts_to_index)
 
@@ -124,22 +128,27 @@ class RAGService:
         top_k: int | None = None,
         filter_conditions: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        """Busca chunks similares a una consulta dentro de la coleccion activa."""
+        """Busca chunks similares a una consulta dentro de la particion (ambiente) activa."""
         effective_top_k = top_k or self._settings.rag_default_top_k
         return self._vector_store.search(
             collection_name=self.collection_name,
             query_vector=self._embedding_provider.embed_query(query),
             top_k=effective_top_k,
             filter_conditions=filter_conditions,
+            partition_name=self.partition_name,
         )
 
     def clear_collection(self) -> None:
-        """Elimina completamente la coleccion vectorial actual."""
-        self._vector_store.delete_collection(self.collection_name)
+        """Elimina solo la particion (ambiente) activa, sin afectar otros
+        ambientes que compartan la misma coleccion/proyecto (ver
+        pendientes.md P-33)."""
+        self._vector_store.delete_partition(self.collection_name, self.partition_name)
 
     def delete_records(self, filter_conditions: dict[str, Any]) -> int:
-        """Elimina registros de la coleccion activa que cumplan el filtro indicado."""
-        return self._vector_store.delete_records(self.collection_name, filter_conditions)
+        """Elimina registros de la particion (ambiente) activa que cumplan el filtro indicado."""
+        return self._vector_store.delete_records(
+            self.collection_name, filter_conditions, partition_name=self.partition_name
+        )
 
     def _split_text(
         self,

@@ -25,12 +25,20 @@ class InMemoryVectorStore(VectorStoreInterface):
     autocontenido mientras se integra un motor vectorial real.
     """
 
+    _DEFAULT_PARTITION = "_default"
+
     def __init__(self) -> None:
         self._collections: dict[str, list[dict[str, Any]]] = {}
+        self._partitions: dict[str, set[str]] = {}
 
     def create_collection(self, collection_name: str, vector_size: int, **kwargs: Any) -> None:
         """Crea la coleccion si aun no existe."""
         self._collections.setdefault(collection_name, [])
+        self._partitions.setdefault(collection_name, {self._DEFAULT_PARTITION})
+
+    def create_partition(self, collection_name: str, partition_name: str) -> None:
+        """Crea la particion (ambiente, ver pendientes.md P-33) si aun no existe."""
+        self._partitions.setdefault(collection_name, {self._DEFAULT_PARTITION}).add(partition_name)
 
     def insert_vectors(
         self,
@@ -38,9 +46,12 @@ class InMemoryVectorStore(VectorStoreInterface):
         vectors: list[list[float]],
         payloads: list[dict[str, Any]] | None = None,
         ids: list[str] | None = None,
+        partition_name: str | None = None,
     ) -> None:
-        """Inserta vectores y payloads asociados en la coleccion indicada."""
+        """Inserta vectores y payloads asociados en la coleccion/particion indicada."""
         self.create_collection(collection_name, vector_size=len(vectors[0]) if vectors else 0)
+        effective_partition = partition_name or self._DEFAULT_PARTITION
+        self.create_partition(collection_name, effective_partition)
         if payloads is None:
             payloads = [{} for _ in vectors]
         if ids is None:
@@ -48,7 +59,12 @@ class InMemoryVectorStore(VectorStoreInterface):
 
         for record_id, vector, payload in zip(ids, vectors, payloads):
             self._collections[collection_name].append(
-                {"id": record_id, "vector": vector, "payload": payload}
+                {
+                    "id": record_id,
+                    "vector": vector,
+                    "payload": payload,
+                    "_partition": effective_partition,
+                }
             )
 
     def search(
@@ -57,10 +73,14 @@ class InMemoryVectorStore(VectorStoreInterface):
         query_vector: list[float],
         top_k: int = 5,
         filter_conditions: dict[str, Any] | None = None,
+        partition_name: str | None = None,
     ) -> list[dict[str, Any]]:
         """Busca por similitud coseno sobre los registros disponibles."""
         records = self.list_records(
-            collection_name, limit=10_000, filter_conditions=filter_conditions
+            collection_name,
+            limit=10_000,
+            filter_conditions=filter_conditions,
+            partition_name=partition_name,
         )
         scored = []
         for record in records:
@@ -74,9 +94,17 @@ class InMemoryVectorStore(VectorStoreInterface):
         collection_name: str,
         limit: int = 100,
         filter_conditions: dict[str, Any] | None = None,
+        partition_name: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Lista registros crudos aplicando un filtro exacto simple por payload."""
+        """Lista registros crudos aplicando un filtro exacto simple por payload.
+
+        ``partition_name`` es opcional -- sin el, lista registros de todas las
+        particiones de la coleccion (misma semantica que Milvus real con
+        ``partition_names=None``).
+        """
         records = list(self._collections.get(collection_name, []))
+        if partition_name:
+            records = [record for record in records if record.get("_partition") == partition_name]
         if filter_conditions:
             records = [
                 record
@@ -88,15 +116,33 @@ class InMemoryVectorStore(VectorStoreInterface):
         return records[:limit]
 
     def delete_collection(self, collection_name: str) -> None:
-        """Elimina completamente una coleccion en memoria."""
+        """Elimina completamente una coleccion en memoria (todas sus particiones)."""
         self._collections.pop(collection_name, None)
+        self._partitions.pop(collection_name, None)
 
-    def delete_records(self, collection_name: str, filter_conditions: dict[str, Any]) -> int:
+    def delete_partition(self, collection_name: str, partition_name: str) -> None:
+        """Elimina solo esta particion (ambiente), sin afectar el resto de la coleccion."""
+        records = self._collections.get(collection_name, [])
+        self._collections[collection_name] = [
+            record for record in records if record.get("_partition") != partition_name
+        ]
+        self._partitions.get(collection_name, set()).discard(partition_name)
+
+    def delete_records(
+        self,
+        collection_name: str,
+        filter_conditions: dict[str, Any],
+        partition_name: str | None = None,
+    ) -> int:
         """Elimina registros que cumplan el filtro exacto indicado; retorna cuantos se borraron."""
         records = self._collections.get(collection_name, [])
         kept, deleted = [], 0
         for record in records:
-            if all(record["payload"].get(key) == value for key, value in filter_conditions.items()):
+            matches_partition = not partition_name or record.get("_partition") == partition_name
+            matches_filter = all(
+                record["payload"].get(key) == value for key, value in filter_conditions.items()
+            )
+            if matches_partition and matches_filter:
                 deleted += 1
             else:
                 kept.append(record)
@@ -138,15 +184,20 @@ class VectorStoreManager:
         """Delega la creacion de coleccion al adapter configurado."""
         self.store.create_collection(collection_name, vector_size, **kwargs)
 
+    def create_partition(self, collection_name: str, partition_name: str) -> None:
+        """Delega la creacion de particion (ambiente, ver pendientes.md P-33) al backend activo."""
+        self.store.create_partition(collection_name, partition_name)
+
     def insert_vectors(
         self,
         collection_name: str,
         vectors: list[list[float]],
         payloads: list[dict[str, Any]] | None = None,
         ids: list[str] | None = None,
+        partition_name: str | None = None,
     ) -> None:
         """Delega insercion de vectores al backend activo."""
-        self.store.insert_vectors(collection_name, vectors, payloads, ids)
+        self.store.insert_vectors(collection_name, vectors, payloads, ids, partition_name)
 
     def search(
         self,
@@ -154,33 +205,48 @@ class VectorStoreManager:
         query_vector: list[float],
         top_k: int = 5,
         filter_conditions: dict[str, Any] | None = None,
+        partition_name: str | None = None,
     ) -> list[dict[str, Any]]:
         """Delega busqueda vectorial al backend activo."""
-        return self.store.search(collection_name, query_vector, top_k, filter_conditions)
+        return self.store.search(
+            collection_name, query_vector, top_k, filter_conditions, partition_name
+        )
 
     def list_records(
         self,
         collection_name: str,
         limit: int = 100,
         filter_conditions: dict[str, Any] | None = None,
+        partition_name: str | None = None,
     ) -> list[dict[str, Any]]:
         """Delega listado de registros al backend activo."""
-        return self.store.list_records(collection_name, limit, filter_conditions)
+        return self.store.list_records(collection_name, limit, filter_conditions, partition_name)
 
     def delete_collection(self, collection_name: str) -> None:
-        """Delega borrado de coleccion al backend activo."""
+        """Delega borrado de coleccion (todas sus particiones) al backend activo."""
         self.store.delete_collection(collection_name)
 
-    def delete_records(self, collection_name: str, filter_conditions: dict[str, Any]) -> int:
+    def delete_partition(self, collection_name: str, partition_name: str) -> None:
+        """Delega borrado de una sola particion (ambiente) al backend activo,
+        sin afectar el resto de particiones de la misma coleccion/proyecto."""
+        self.store.delete_partition(collection_name, partition_name)
+
+    def delete_records(
+        self,
+        collection_name: str,
+        filter_conditions: dict[str, Any],
+        partition_name: str | None = None,
+    ) -> int:
         """Delega borrado de registros filtrados al backend activo.
 
         ``filter_conditions`` es obligatorio: sin filtro, borrar "por registro"
         equivaldria a vaciar la coleccion entera sin pasar por
-        ``delete_collection``, que es la operacion pensada para ese caso.
+        ``delete_collection``/``delete_partition``, que son las operaciones
+        pensadas para ese caso.
         """
         if not filter_conditions:
             raise ValueError("filter_conditions is required to delete records")
-        return self.store.delete_records(collection_name, filter_conditions)
+        return self.store.delete_records(collection_name, filter_conditions, partition_name)
 
     def collection_exists(self, collection_name: str) -> bool:
         """Delega verificacion de existencia al backend activo."""

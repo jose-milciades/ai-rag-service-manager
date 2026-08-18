@@ -146,9 +146,19 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MILVUS_SEARCH_NPROBE"),
     )
 
-    rag_collection_name_prefix: str = Field(
-        default="",
-        validation_alias=AliasChoices("RAG_COLLECTION_NAME_PREFIX"),
+    # Ambiente logico (analogo al "index" de Pinecone en edi-ai-analysis-ai,
+    # ver pendientes.md P-33): se usa como nombre de PARTICION Milvus dentro
+    # de la coleccion de cada proyecto (coleccion = proyecto solo, sin
+    # concatenar -- ej. coleccion "project_127", particion "edi_dev"). Asi
+    # varios ambientes que comparten una misma instancia Milvus quedan
+    # separados y administrables por separado (browsear/borrar un ambiente
+    # sin tocar los demas), sin ensuciar el nombre de la coleccion.
+    # Reemplaza a RAG_COLLECTION_NAME_PREFIX (antes opcional/vacio por
+    # defecto, prefijo simple en el nombre): ahora es obligatorio-por-default
+    # y con valores fijos.
+    rag_environment: str = Field(
+        default="edi-local",
+        validation_alias=AliasChoices("RAG_ENVIRONMENT"),
     )
     rag_default_collection_name: str = Field(
         default="default_rag_collection",
@@ -219,6 +229,21 @@ class Settings(BaseSettings):
         parsear `""` como int y falla. Solo aplica a este campo porque es el
         unico `int | None` de Settings."""
         return None if value == "" else value
+
+    @field_validator("rag_environment")
+    @classmethod
+    def _validate_rag_environment(cls, value: str) -> str:
+        """RAG_ENVIRONMENT solo acepta estos 4 valores (ver pendientes.md
+        P-33): un typo aca crearia silenciosamente una coleccion Milvus bajo
+        un ambiente inexistente, en vez de fallar fuerte al arrancar -- mismo
+        criterio que ``VaultClient`` (falla fuerte y explicito, no cae en
+        silencio a un default distinto al pedido)."""
+        allowed = {"edi-local", "edi-dev", "edi-stage", "edi-prod"}
+        if value not in allowed:
+            raise ValueError(
+                f"RAG_ENVIRONMENT invalido: {value!r}. Valores permitidos: {sorted(allowed)}"
+            )
+        return value
 
 
 @lru_cache

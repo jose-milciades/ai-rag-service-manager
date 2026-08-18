@@ -46,7 +46,7 @@ Cómo usarlo:
 | P-30 | `RAG_OPENAI_EMBEDDING_DIMENSIONS=""` rompía el arranque con Vault (`int \| None` no acepta string vacío) | Media | Resuelto |
 | P-31 | Java/operator propagaban su propio nombre de bucket en vez de dejar que `ai-rag-service-manager` resuelva el suyo | Media | Resuelto |
 | P-32 | Integrar `edi-ai-chat-backend` (microservicio nuevo en el workspace): quitar GCS directo y config de storage propia, dejar plumbing para consumir `ai-rag-service-manager` | Media | Resuelto |
-| P-33 | Documento "Mapeo Pinecone→Milvus" propone Namespace→Partition y metadata dinámica; no coincide con el diseño real (Namespace→Collection, metadata en `payload` JSON) | Media | Pendiente |
+| P-33 | Documento "Mapeo Pinecone→Milvus" propone Namespace→Partition; no coincide con el diseño real. Ampliado con evidencia real de Pinecone en producción; se implementó `RAG_ENVIRONMENT` (edi-local/edi-dev/edi-stage/edi-prod) como **partición real de Milvus** dentro de la colección de cada proyecto (colección = proyecto solo, sin concatenar) | Media | Resuelto (partición real de Milvus) |
 | P-34 | `DELETE .../resources/{resourceId}/documents/delete/{documentId}` (Java) inactiva el documento en Postgres pero no borra su vector en Milvus | Alta | Resuelto |
 | P-35 | `VECTOR_CHUNK_SIZE`/`VECTOR_CHUNK_OVERLAP`/`VECTOR_K_SIMILILARITY` (parámetros configurables de Java, aplicados en `edi-ai-analysis-ai`) no se aplican en `ai-rag-service-manager` | Media | Resuelto (parcial) |
 | P-36 | La condición para vectorizar un documento no considera `resources_type.code = 'data_base_embedding'` — solo mira `codeTypeDocument` | Alta | Resuelto |
@@ -544,6 +544,171 @@ Detectados el 2026-08-11 al analizar el código real de `edi-ai-proyectos-backen
 - **Impacto de implementar el documento tal cual:** no es un simple "ajuste" — implica (a) migrar todas las colecciones ya existentes (una por proyecto) hacia particiones de una única colección compartida, con todo lo que eso conlleva (reindexar o migrar datos, cambiar `_resolve_collection_name`/`create_collection`/`delete_collection`/`search`/`delete_records` para operar con `partition_name`/`partition_names` en vez de `collection_name`); y (b) cambiar el schema de almacenamiento de metadata (de `payload` JSON a campos dinámicos), rompiendo cualquier código que dependa de `payload["..."]` hoy. Ninguno de los dos cambios es trivial ni está pedido por ningún otro pendiente de este documento.
 - **Nota sobre el trade-off real (para cuando se decida, no una recomendación de acción ahora):** el diseño actual (colección por proyecto) da aislamiento total pero cada colección de Milvus tiene su propio índice y consume recursos propios al cargarse — con muchos proyectos, el número de colecciones puede volverse un problema operativo (mantener cientos/miles de colecciones cargadas). El diseño que propone el documento (partición por proyecto dentro de una colección compartida) reduce ese overhead por tenant pero comparte el índice/schema entre todos los proyectos. Es una decisión de arquitectura real, no una corrección de bug — debe evaluarse deliberadamente, no adoptarse porque un documento de mapeo genérico lo sugiere.
 - **Acción sugerida:** no implementar el documento tal cual. Si se quiere evaluar el cambio a particiones por volumen de proyectos/colecciones, tratarlo como un rediseño explícito (con plan de migración de datos existentes), no como una corrección menor.
+
+#### Ampliación (2026-08-18) — evidencia real de Pinecone en producción + qué se requeriría para replicar ese árbol en Milvus
+
+El usuario mostró capturas reales de la consola de Pinecone (proyecto "Jose Milciades Ordoñez Argote's Org", app `Chatbot`) con 3 índices (`edi-dev`, `edi-prod`, `edi`) y el browser de registros de `edi-dev`, namespace `project_127`, con un registro real y su metadata. **Esto no es un mock ni un ejemplo del documento en disputa: es el vector store real y en uso hoy de `edi-ai-analysis-ai`** (el micro que `ai-rag-service-manager` está reemplazando) — confirmado cruzando las capturas contra el código real de ese repo (`app/utils/vector_store_utils.py`, `app/utils/tools_document.py`) y su propio doc `EMBEDDINGS_Y_BUSQUEDA_VECTORIAL.md`, que ya documentaba esto de forma independiente ("la config vectorial 'viva' del sistema de análisis es la de Pinecone").
+
+**TL;DR — qué se requiere:** nada, si el objetivo es solo "que `ai-rag-service-manager` siga funcionando" (ya funciona, es un sistema nuevo, no tiene que heredar la forma de Pinecone). Pero si el objetivo es **migrar sin perder la separación operativa que ya existía en producción** (1 índice por ambiente, proyectos como namespaces dentro de ese único índice), entonces sí falta trabajo real: hoy `ai-rag-service-manager` crea **una colección Milvus por proyecto** (sin nivel "ambiente" ni "namespace/partición" intermedio), que es una jerarquía distinta a la de Pinecone. Ver el detalle de qué implicaría cada opción en "Qué se requeriría" más abajo — sigue siendo, como ya concluía este pendiente, una decisión de arquitectura explícita, no algo para ejecutar de oficio.
+
+**1. Árbol real de Pinecone en producción (`edi-ai-analysis-ai`), confirmado por código:**
+
+```
+Cuenta Pinecone ("Jose Milciades Ordoñez Argote's Org" / app "Chatbot")
+└── Index  (1 por ambiente — resuelto por Spring Cloud Config Server,
+            key remota `pinecone.collection.name`, vía
+            ConfigServer.get_pinecone_collection_name();
+            se crea perezosamente si no existe, dimension=3072,
+            metric=cosine, ServerlessSpec(aws, us-east-1))
+    ├── edi-dev    (ambiente dev — 3072 dim, on-demand, us-east-1)
+    ├── edi-prod   (ambiente prod — idéntica config)
+    └── edi        (tercer índice visible en la captura; no confirmado a
+                    qué perfil/ambiente corresponde — candidato: un
+                    profile de config-server anterior al split dev/prod,
+                    o un ambiente adicional no documentado. Pendiente de
+                    confirmar con el equipo si hace falta.)
+        └── Namespace  (1 por proyecto — "índice lógico"; se arma como
+                        `f"project-{id}".replace("-", "_")`, ej.
+                        `project_127`; Pinecone lo autocrea en el primer
+                        upsert, sin llamada explícita de creación — a
+                        diferencia de una colección Milvus, que sí
+                        requiere `create_collection` antes de insertar)
+            ├── project_127   (7 namespaces visibles en la captura de
+            ├── ...           `edi-dev`: "NAMESPACES (7)")
+            └── Record  (1 por chunk, id interno tipo UUID — `_id` en la
+                         captura, ej. `011085d6-54c8-...` — no confundir
+                         con el campo de metadata `id`, que es otra cosa,
+                         ver tabla de metadata)
+                └── metadata (campos PLANOS al nivel del record — no hay
+                              un único campo JSON anidado como en Milvus)
+```
+
+**2. Árbol real actual en `ai-rag-service-manager` (Milvus), confirmado por código (`app/services/rag/rag_service.py`, `app/infrastructure/vector_store/milvus_vector_store.py`):**
+
+```
+Instancia Milvus (una por ambiente — dev y prod corren instancias
+Milvus separadas por completo, no una compartida con namespacing
+lógico interno; ver docker-compose de edi-ai-orquestadores/milvus)
+└── Collection  (1 POR PROYECTO directamente — sin nivel "ambiente" ni
+                 "namespace/partición" intermedio dentro de la
+                 instancia. El nombre de colección ES el
+                 `indexVecstore`/`index_name` que manda el caller,
+                 sanitizado por `_sanitize_collection_name`
+                 (RAGService/rag_service.py) + prefijo opcional
+                 `RAG_COLLECTION_NAME_PREFIX` — Settings, default ""
+                 en todos los ambientes probados hasta ahora, o sea:
+                 hoy NO hay prefijo de ambiente aplicado al nombre)
+    ├── project_127   (= collection_name; equivalente al namespace de
+    ├── project_93     Pinecone, pero acá es la unidad de aislamiento
+    ├── ...             completa: su propio schema, su propio índice
+    │                    vectorial cargado en memoria)
+    └── Record  (1 por chunk)
+        ├── id       (PK, VARCHAR, uuid — generado por
+        │             MilvusVectorStore.insert_vectors)
+        ├── vector   (FLOAT_VECTOR, dim = embedding_provider.dim)
+        └── payload  (un único campo JSON, TODA la metadata anidada
+                      adentro — ver tabla abajo. Schema creado con
+                      `enable_dynamic_field=False`, exactamente estos
+                      3 campos top-level, nada más)
+```
+
+**Diferencia estructural real (no solo terminológica):** en Pinecone, "ambiente" y "namespace/proyecto" son dos niveles reales y separados (1 índice por ambiente, N namespaces por índice). En Milvus hoy, el "ambiente" ni siquiera es un concepto dentro de la instancia (se resuelve por tener instancias Milvus separadas), y "proyecto" pasó a ser el nivel más alto y único (la colección) — se perdió el nivel intermedio que en Pinecone se resolvía con namespaces (y que el documento en disputa proponía resolver con particiones dentro de una colección compartida).
+
+**3. Metadata — dónde queda cargada y descripción de cada campo**
+
+**3a. Pinecone real / `edi-ai-analysis-ai` (legado, confirmado en `app/utils/tools_document.py:28-44`, `setMetadataDoc`):**
+
+Campos planos al nivel del record (no anidados), asignados por chunk al indexar:
+
+| Campo | Origen / valor | Descripción |
+|---|---|---|
+| `source` | = `file_name` | Duplicado de `file_name`; convención de LangChain (`Document.metadata["source"]` es la clave "estándar" que varios loaders/chains de LangChain esperan por defecto). |
+| `id` | = `id_document` | Identificador lógico del documento (el mismo que Java/Postgres conoce como `id_document`). **No confundir con el `_id` interno de Pinecone** (UUID autogenerado, visible arriba de la metadata en la captura) — son dos IDs distintos con el mismo nombre corto. |
+| `file_name` | nombre del archivo | Nombre del archivo tal cual se subió/guardó en storage. |
+| `nombre_documento` | = `file_name` | Segundo duplicado de `file_name` (además de `source`) — así quedan 3 copias del mismo valor bajo 3 claves distintas por cada chunk. |
+| `position` | contador secuencial, 0-based | Índice del chunk dentro del documento (0, 1, 2...) — usado por `find_adjacent_chunks_old` para pedir los siguientes N chunks por rango de `position`. Equivalente a `chunk_index` en `ai-rag-service-manager`. |
+| `codigo` | = `id_document` | Segundo duplicado de `id` (mismo valor, otra clave) — usado como filtro exacto (`{"id": {"$eq": id}}`) en varios puntos de `tools_agent.py`. |
+| `start_index` | autogenerado por LangChain | `RecursiveCharacterTextSplitter(..., add_start_index=True)` lo agrega solo, sin código propio — offset de caracteres donde empieza el chunk en el texto original. Es la base de `find_adjacent_chunks_new` (expansión ±500 caracteres). Equivalente a `start_index` en `ai-rag-service-manager` (mismo nombre, mismo propósito — P-37 lo replicó a propósito). |
+| *(el "Show 1 more" de la captura)* | probablemente `text` | `PineconeVectorStore`/`langchain_pinecone` guarda el `page_content` del chunk como un campo de metadata más (clave por defecto `"text"`) — no se ve en la captura por estar colapsado, pero es el comportamiento estándar de esa librería y coincide con que sea el único campo faltante de los 8 totales. No confirmado por captura completa, sí por comportamiento documentado de `langchain_pinecone`. |
+
+**3b. `ai-rag-service-manager` / Milvus (actual, confirmado en `document_embedding_service.py` + `rag_service.py`):**
+
+Todos estos campos viven **anidados dentro de un único campo `payload` (JSON)** del record Milvus — no son columnas propias:
+
+| Campo (clave dentro de `payload`) | Origen | Descripción |
+|---|---|---|
+| `file_name` | parámetro del caller | Nombre del archivo (equivalente a `file_name`/`nombre_documento`/`source` de Pinecone, pero sin duplicar — una sola clave). |
+| `id_document` | parámetro del caller | Identificador lógico del documento (equivalente a `id`/`codigo` de Pinecone, una sola clave en vez de dos). |
+| `unique_code` | parámetro del caller | Código único de Java/operator para el documento (`Document.uniqueCode`/`uniqueCodeStorage` en Java) — es la clave real usada para filtrar/borrar/listar chunks de un documento (`delete_records({"id_document": ...})`, `list_records(filter_conditions={"unique_code": ...})`). No tiene equivalente 1:1 en el esquema de Pinecone de arriba (ese repo no maneja este concepto). |
+| `bucket` | parámetro del caller | Bucket de storage (GCS) donde vive el archivo original — necesario para poder re-descargarlo (P-37, `_expand_via_source_reslice`). Sin equivalente en Pinecone (ese repo no re-descarga el original para expandir contexto del mismo modo). |
+| `source` | constante `"document_upload"` | A diferencia de Pinecone (donde `source` = nombre de archivo), acá es un valor fijo que indica el origen del chunk (por ahora siempre el mismo, sin otros valores en uso). |
+| `chunk_index` | contador secuencial, 0-based | Equivalente exacto a `position` en Pinecone — mismo propósito (fallback de "adjacent chunks" por rango, P-37 `_expand_via_adjacent_chunk_index`). |
+| `start_index` / `end_index` | offsets calculados por `RAGService._split_text` | Mismo propósito que `start_index` en Pinecone (expansión por offset de caracteres, P-37), pero acá se guardan **ambos** extremos (Pinecone/LangChain solo agrega el de inicio) — permite recortar la ventana exacta del chunk sin tener que inferir el final. |
+| `text` | el propio texto del chunk | Igual que el campo homónimo (probable) de Pinecone — el contenido del chunk, para no depender de recuperar el vector para leer qué dice. |
+| *(claves de `VECTOR_CHUNK_SIZE`/`VECTOR_CHUNK_OVERLAP`/etc.)* | `list_parameters` normalizado (`_normalize_parameters`) | Todo lo que Java mande en `listParameters` (ver P-21/P-35) se vuelca tal cual dentro del mismo `payload`, con la clave literal que mande Java (ej. `payload["VECTOR_CHUNK_SIZE"]`) — metadata de auditoría/trazabilidad, no se relee para nada operativo salvo `VECTOR_CHUNK_SIZE`/`VECTOR_CHUNK_OVERLAP` (P-35, ya sí tienen efecto real en el chunking, ver ese pendiente). |
+
+**Equivalencias directas entre ambos esquemas** (mismo concepto, otro nombre):
+
+| Concepto | Pinecone (legado) | Milvus (actual) |
+|---|---|---|
+| Documento lógico | `id` / `codigo` (duplicados) | `id_document` |
+| Nombre de archivo | `file_name` / `nombre_documento` / `source` (triplicados) | `file_name` |
+| Posición del chunk | `position` | `chunk_index` |
+| Offset de inicio (para expandir contexto) | `start_index` (autogenerado por LangChain) | `start_index` (calculado a mano en `_split_text`, P-37) |
+| Offset de fin | *(no existe — solo inicio)* | `end_index` (mejora respecto al esquema legado) |
+| Texto del chunk | `text` (probable, vía `langchain_pinecone`) | `text` |
+| Código único para filtrar/borrar por documento | *(no existe un equivalente directo — Pinecone usa `id`/`codigo`)* | `unique_code` |
+
+**4. Qué se requeriría para replicar el árbol real de Pinecone (1 índice por ambiente + namespace por proyecto) en Milvus — sin implementar, solo enumerado:**
+
+1. **Colapsar todas las colecciones-por-proyecto en una única colección compartida por ambiente** (`RAGService`/`_resolve_collection_name` dejarían de recibir el proyecto como `collection_name`; el proyecto pasaría a ser un parámetro aparte).
+2. **Adoptar la API de particiones de Milvus** (`create_partition`, `partition_names`, `load_partitions`, `drop_partition`) en `MilvusVectorStore` y en el contrato de `VectorStoreInterface`/`VectorStoreManager` — hoy ninguno de los dos la conoce (grep confirmado: cero referencias). Cada método (`insert_vectors`, `search`, `list_records`, `delete_records`) necesitaría un `partition_name` explícito además del `collection_name`.
+3. **Redefinir la semántica de "borrar todo un proyecto".** Hoy `delete_index`/`delete_collection` borra la colección completa (aislada, 1 por proyecto) — bajo particiones, el equivalente sería `drop_partition` (deja intacta la colección compartida y el resto de proyectos), una operación distinta a "borrar la colección entera" (que ya no tendría sentido hacer por proyecto).
+4. **Plan de migración de datos ya existentes:** las colecciones-por-proyecto que ya están en uso (confirmadas en producción vía P-25/P-26/P-28/etc.) tendrían que migrarse (leer vía `list_records` de cada colección vieja, reinsertar en la partición correspondiente de la colección compartida) — no hay atajo, Milvus no tiene un "mover colección a partición" nativo.
+5. **Decidir si conviene 1 colección compartida por ambiente (mimetizando 1:1 el índice de Pinecone) o mantener el criterio actual de "1 instancia Milvus por ambiente" y usar particiones solo para separar proyectos dentro de esa instancia** — con el volumen real observado en las capturas (3 índices, 7 namespaces, 0.97GB/2GB de uso), la escala actual de producción es chica; el argumento original de P-33 ("con muchos proyectos, mantener cientos/miles de colecciones es un problema operativo") todavía no se manifiesta en los datos reales vistos, lo que resta urgencia (no descarta la decisión, la vuelve menos apremiante).
+6. **Fuera de esta migración de árbol (independiente, no lo exige):** unificar/renombrar los campos de metadata duplicados del esquema legado (`codigo`/`id`, `file_name`/`nombre_documento`/`source`) no es necesario para el cambio de partición — son dos decisiones ortogonales. `ai-rag-service-manager` ya usa un esquema sin esas duplicaciones; no hay necesidad de heredar la redundancia de Pinecone al migrar.
+
+**5. Decisión del usuario (2026-08-18) y qué se implementó:**
+
+Ante las dos preguntas abiertas de la sección anterior, el usuario decidió explícitamente:
+- **Diseño del "index" de ambiente:** opción liviana — **prefijo de ambiente en el nombre de colección** (no particiones reales de Milvus). Sigue existiendo 1 colección Milvus por proyecto, pero su nombre ahora queda `{ambiente}_{proyecto}` (ej. `edi_local_project_127`). Se descartó explícitamente la opción de particiones reales (ítems 1-4 de arriba) por ser mucho más invasiva y no justificada por la escala real observada (ítem 5 de arriba).
+- **Datos ya indexados sin prefijo** (`project_93`, `project_p37test`, `project_70` — generados durante las pruebas E2E de esta misma sesión, P-34/P-36/P-37): **eliminar**, no migrar — son datos de prueba de desarrollo, no de clientes reales.
+- **Valores permitidos:** exactamente `edi-local` (ambiente de pruebas de desarrollo local, el que se usó en toda esta sesión), `edi-dev`, `edi-stage`, `edi-prod` — mismos 4 nombres que pidió el usuario, con el prefijo `edi-` ya usado por los índices reales de Pinecone vistos en las capturas (`edi-dev`, `edi-prod`, `edi`).
+
+**Implementación, `ai-rag-service-manager`:**
+
+- **`app/core/config.py`:** se reemplazó `rag_collection_name_prefix` (`str`, default `""`, opcional) por `rag_environment` (`str`, validation_alias `RAG_ENVIRONMENT`, default `"edi-local"`) con un `field_validator` nuevo (`_validate_rag_environment`) que **falla fuerte** (`ValueError`) si el valor no es exactamente uno de los 4 permitidos — mismo criterio que `VaultClient` (fallar explícito ante un typo, no caer en silencio a un ambiente distinto al pedido). Funciona igual desde `.env`, variable de entorno exportada, o Vault (`vault.load_configs(["ai-rag-service-manager", ...])` pasa las claves tal cual a `Settings(**config)` — no requiere ningún cambio adicional de plumbing, es el mismo mecanismo que ya usaban todas las demás variables `RAG_*`).
+- **`app/services/rag/rag_service.py`:** `_resolve_collection_name` (renombrado el parámetro `prefix`→`environment` para reflejar que ya no es opcional) y `RAGService.__init__` ahora usan `settings.rag_environment` en vez de `settings.rag_collection_name_prefix`. Ningún otro archivo llamaba a `_resolve_collection_name` directamente ni conocía el nombre de campo viejo (grep confirmado) — el cambio queda contenido a estos dos puntos.
+- **`.env` / `.env.example` / `README.md`:** `RAG_COLLECTION_NAME_PREFIX=` reemplazado por `RAG_ENVIRONMENT=edi-local` (con comentario explicando los 4 valores permitidos y la referencia a este pendiente).
+- **Sin cambios de contrato HTTP:** Java y `edi-ai-operator` siguen mandando `indexVecstore`/`index_name` exactamente igual que hoy (ej. `project_127`) — el ambiente no es algo que ellos manden, lo resuelve `ai-rag-service-manager` internamente a partir de su propia config. Cero impacto en esos dos repos.
+- **Verificación real, contra Milvus real (`localhost:19530`, mismo contenedor usado en toda la sesión):**
+  1. `ruff check .` y `mypy app` limpios.
+  2. `Settings(RAG_ENVIRONMENT=...)` probado con default (`edi-local`), valor explícito (`edi-dev`) y valor inválido (`bogus`) — los 3 casos correctos: default correcto, override correcto, `ValidationError` real lanzado para el valor inválido.
+  3. `_resolve_collection_name` probado con ambos ambientes: `project_999` → `edi_local_project_999` / `edi_dev_project_999`.
+  4. **Prueba real de punta a punta contra Milvus real** (no mockeada): `RAGService(settings, ..., collection_name="project_999")` con `RAG_ENVIRONMENT` default creó efectivamente la colección `edi_local_project_999` en el Milvus real (`vector_store_manager.collection_exists(...)` → `True`), confirmando que el prefijo llega hasta la creación real de la colección, no solo hasta el cálculo del nombre.
+- **Limpieza de datos huérfanos (decisión explícita del usuario, "eliminar"):** se listaron las colecciones reales existentes en el Milvus local antes de borrar (`project_93` con 77 registros, `project_p37test` con 1, `project_70` con 0 — las tres generadas durante las pruebas E2E de P-34/P-36/P-37 de esta sesión) y se eliminaron (`client.drop_collection(...)`), junto con la colección de verificación (`edi_local_project_999`) creada en el punto anterior. Milvus local queda sin colecciones — todo lo que se indexe de ahora en más nace ya con el prefijo de ambiente.
+- **Pendiente del lado del usuario (no ejecutable desde acá):** los despliegues reales vía `run-local-vault.sh`/Vault (`USE_VAULT_CONFIG=true`) leen `RAG_ENVIRONMENT` del secreto Vault en el path `ai-rag-service-manager` (mismo mecanismo que el resto de variables `RAG_*`) — mientras ese secreto no incluya la clave `RAG_ENVIRONMENT`, el servicio arranca igual (cae al default `edi-local`) pero **sin reflejar el ambiente real** de ese despliegue. Falta que el equipo agregue `RAG_ENVIRONMENT=edi-dev` (o el que corresponda) al secreto de Vault de cada ambiente — no se puede hacer desde este entorno (requiere acceso de escritura al Vault real del equipo).
+- **Acción sugerida:** ninguna — resuelto en su momento (diseño de prefijo liviano). **Reemplazado el mismo día por el punto 6 de abajo** (partición real de Milvus), a pedido del usuario.
+
+**6. Ajuste (2026-08-18, mismo día): de prefijo en el nombre a partición real de Milvus**
+
+El usuario pidió explícitamente cambiar el diseño recién implementado: en vez de concatenar `{ambiente}_{proyecto}` como nombre de colección, usar la **API de particiones real de Milvus** — colección = proyecto solo (sin concatenar, ej. `project_127`), partición = ambiente (ej. `edi_dev`) dentro de esa colección — "será más fácil de administrar" (browsear/borrar un ambiente puntual en Attu sin que su nombre quede mezclado con el del proyecto, y sin tener que recrear la colección completa para cambiar de ambiente).
+
+Esto es justo el ítem 2 de la sección "4" de arriba (que se había descartado por invasivo), pero **acotado**: no colapsa múltiples proyectos en una colección compartida (seguía siendo 1 colección por proyecto, eso no cambió) — solo mueve el ambiente de "prefijo en el nombre" a "partición dentro de la colección". Mucho menos invasivo que el rediseño completo de la sección "4".
+
+**Implementación, `ai-rag-service-manager`:**
+
+- **`app/infrastructure/vector_store/vector_store_interface.py`:** contrato ampliado con `create_partition`/`delete_partition` (nuevos, abstractos) y parámetro opcional `partition_name` en `insert_vectors`/`search`/`list_records`/`delete_records`.
+- **`app/infrastructure/vector_store/milvus_vector_store.py`:** implementación real vía `pymilvus.MilvusClient` — `create_partition`/`has_partition`/`drop_partition` (con `release_partitions` antes de `drop_partition`, requerido por Milvus para una partición cargada), `insert(..., partition_name=...)` (parámetro singular en la API real), `search(..., partition_names=[...])`/`query(..., partition_names=[...])` (plural, lista, para buscar/listar dentro de esa partición nada más), `delete(..., partition_name=...)`. Firmas exactas confirmadas por introspección real de `pymilvus` 3.0.1 instalado (no asumidas).
+- **`app/infrastructure/vector_store/vector_store_manager.py`:** `InMemoryVectorStore` (backend de desarrollo sin Milvus real) simula particiones etiquetando cada registro con `_partition` y filtrando por ella cuando se pide; `VectorStoreManager` (facade) expone los métodos nuevos y reenvía `partition_name` en los existentes.
+- **`app/services/rag/rag_service.py`:** **eliminada** `_resolve_collection_name` (la función de concatenación, ya no hace falta). `RAGService.collection_name` ahora es el proyecto solo, sanitizado (`_sanitize_collection_name(collection_name or rag_default_collection_name)`); `RAGService.partition_name` (atributo nuevo, público) es el ambiente solo, sanitizado (`_sanitize_collection_name(settings.rag_environment)`). El constructor crea la colección si falta y **siempre** asegura que la partición del ambiente actual exista (`create_partition`, idempotente). `index_documents`/`search`/`delete_records` pasan `partition_name=self.partition_name`. `clear_collection` (antes: `delete_collection` de la colección completa) ahora llama a `delete_partition` — **borra solo el ambiente actual, sin tocar los demás ambientes que comparten la misma colección/proyecto**.
+- **Hallazgo colateral corregido (bug real, no parte de este pedido pero en el mismo código):** al revisar `document_embedding_service.py` para agregar `partition_name`, se encontró que **4 métodos llamaban a `vector_store_manager` directamente con el `index_name` crudo** (`list_documents_by_index`, `get_embeddings_by_unique_code`, `_expand_via_adjacent_chunk_index`, `delete_index`), sin pasar por `_get_rag_service(...)` para resolver el nombre real de colección — esto ya estaba roto desde la implementación del prefijo de ambiente (punto 5 de arriba, mismo día): esos 4 métodos hubieran consultado una colección `project_127` que ya no existía (la real pasó a llamarse `edi_local_project_127`), devolviendo listas vacías en silencio. Corregido: los 4 ahora resuelven `rag_service = self._get_rag_service(index_name)` primero y usan `rag_service.collection_name`/`rag_service.partition_name`. `delete_index` además cambió de `vector_store_manager.delete_collection(...)` (borraba TODO, cross-ambiente si la colección llegara a compartirse) a `rag_service.clear_collection()` (borra solo la partición/ambiente actual).
+- **Verificación real, contra Milvus real (`localhost:19530`):**
+  1. `ruff check .` y `mypy app` limpios.
+  2. **Prueba de punta a punta con dos ambientes simultáneos sobre el mismo proyecto** (`RAGService` con `RAG_ENVIRONMENT=edi-local` y otra instancia con `RAG_ENVIRONMENT=edi-dev`, mismo `collection_name="project_verif"`): confirmado que ambas resuelven **la misma colección** (`project_verif`) con **particiones distintas** (`edi_local`/`edi_dev`); se indexó un documento distinto en cada una y se confirmó **aislamiento real**: buscar en `edi-local` el contenido indexado en `edi-dev` devuelve 0 resultados relevantes (sin fuga cruzada). `client.list_partitions('project_verif')` (Milvus real) confirmó `['_default', 'edi_local', 'edi_dev']`.
+  3. Se probó el borrado por ambiente (`clear_collection()`/equivalente a `delete_index`): tras borrar la partición `edi_local`, la partición `edi_dev` siguió intacta y buscable (`list_partitions` confirmó `['_default', 'edi_dev']`, ya sin `edi_local`) — el borrado no afecta a otros ambientes.
+  4. Milvus local quedó limpio al final de la verificación (`list_collections()` → `[]`).
+- **Acción sugerida:** ninguna — resuelto con partición real de Milvus, reemplazando el diseño de prefijo del punto 5.
 
 ### P-34 — Inactivar un documento en Java (`DELETE .../resources/{resourceId}/documents/delete/{documentId}`) no elimina el registro vectorial en Milvus
 
