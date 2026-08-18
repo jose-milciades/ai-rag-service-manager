@@ -134,13 +134,18 @@ def rag_document_search(prompts, contextual_memory: ContextualMemory, parameters
                          ms_id_parent: str, depth: int):
     query = parameters["query"]
     index_vecstore = _resolve_index_vecstore(parameters)          # ver 3.2
-    results = search_similar_documents(index_vecstore, query, top_k=5)  # rag_service_client.py
+    top_k = parameters.get("rag_document_search_top_k") or _DEFAULT_TOP_K  # ver 3.6 (P-38)
+    results = search_similar_documents(
+        index_vecstore, query, top_k=top_k, expand_context=True  # ver 3.6 (P-37)
+    )
     function_parameters = {"rag_search_results": _format_results(results)}
     message = contruct_contextual_message(
         prompts, PromptTemplate.RAG_DOCUMENT_SEARCH, function_parameters, parameters, ms_id_parent
     )
     return invoke_model(message, None, None, prompts, contextual_memory)  # mismo patron que company_document_query
 ```
+
+*(Snippet actualizado 2026-08-18 tras P-37/P-38 — ver sección 3.6 para el detalle completo de ambos.)*
 
 Registrada en `TOOLS_REGISTRY` (`tools_registry.py`).
 
@@ -184,6 +189,36 @@ Mismo patrón que ya existe para `company_document_query` (`POST /company-docume
 - **400**: `project` inválido/inactivo (mismo `ValueError` que ya usa `ProjectRepositoryInterface.get_project_by_id` en el resto de la API).
 - **Servicio:** `RagDocumentSearchSimulationService` (`src/service/rag_document_search/rag_document_search_simulation_service.py`), inyectado vía `src/api/dependencies.py` (`get_rag_document_search_simulation_service`, `RagDocumentSearchSimulationServiceDep`). Registrado en `src/api/routes.py`.
 - **Ya no bloqueado — verificado end-to-end el 2026-08-12**: el usuario creó la fila de `CatPrompt` (`id_project = NULL`) y corrió la guía completa de `pruebas-manuales-rag-document-search.md` contra los 3 servicios reales: `200` con respuesta real del LLM basada en un documento PDF real indexado en el proyecto `93`. En el camino se resolvió también P-30 (`RAG_OPENAI_EMBEDDING_DIMENSIONS=""` rompía `Settings` leyendo desde Vault, ver `pendientes.md`).
+
+### 3.6 Adjacent chunks (expansión de contexto) y `top_k` configurable — P-37/P-38
+
+**El consumidor real de esta funcionalidad es exclusivamente `rag_document_search`** (`edi-ai-operator`) — no Java, que no tiene ningún flujo de "preguntar contra documentos" migrado a `ai-rag-service-manager` (ver `pendientes.md` P-35). Todo lo de esta sección está diseñado y verificado en función de esa tool.
+
+**Origen:** al analizar `VECTOR_K_SIMILILARITY` y el comportamiento del micro `edi-ai-analysis-ai` (el que `ai-rag-service-manager` reemplaza), se encontró que ese micro no devuelve el chunk aislado que matcheó por similitud — expande el contexto trayendo texto adyacente, con dos implementaciones paralelas según qué metadata tenga el chunk (`app/utils/tools_agent.py`/`tools_document.py`: `find_adjacent_chunks_new`/`find_adjacent_chunks_old`, `split_documents_by_valid_chunk`). Documentado en detalle en `pendientes.md` P-37; implementado el 2026-08-18.
+
+#### Cómo queda funcionando, de punta a punta
+
+**1. Al indexar** (`ai-rag-service-manager`, `RAGService.index_documents`/`_split_text`): cada chunk ahora persiste `start_index`/`end_index` (offset de caracteres en el documento original), además de `chunk_index` (que ya existía). Documentos indexados **antes** de este cambio no tienen esta metadata nueva — no se retro-completan, quedan en el camino "legacy" descrito abajo.
+
+**2. Al buscar** (`POST /embedding/search_similar_documents`, `expandContext: true`): por cada resultado, `ai-rag-service-manager` elige automáticamente una de dos estrategias según la metadata del chunk:
+
+- **Con `start_index`/`end_index`** (todo lo indexado desde este cambio): re-descarga el documento original de storage (mismo bucket/`file_name` guardados en la metadata del chunk), re-extrae el texto, y recorta una ventana de `settings.rag_adjacent_window_chars` caracteres (default 500) a cada lado del chunk — texto contiguo real, no chunks pegados. A diferencia de `edi-ai-analysis-ai` (que necesitaba guardar una copia de texto plano aparte solo para esto), acá storage y extracción de texto ya viven en el mismo servicio — no hace falta esa copia extra.
+- **Sin esa metadata** (chunks legacy): trae los siguientes `settings.rag_adjacent_chunk_count` chunks consecutivos (default 8, mismo `unique_code`, `chunkIndex` mayor) vía `list_records` con un filtro simple por igualdad, y los concatena en orden — más barato que `edi-ai-analysis-ai` (que reusaba una búsqueda vectorial completa solo para poder filtrar), no requirió extender el motor de filtros de Milvus.
+
+Cada resultado se expande **de forma independiente y aislada**: si la expansión de un resultado falla (ej. el archivo original ya no existe en el bucket), ese resultado en particular simplemente no trae `expandedText` — no rompe los demás resultados ni la búsqueda completa.
+
+**3. En `rag_document_search`** (`edi-ai-operator`): la tool pide `expand_context=True` en cada llamada a `search_similar_documents` (`rag_service_client.py`), y `_format_results` prefiere `result.get("expandedText")` sobre `result.get("textPreview")` — cayendo al preview (200 caracteres) solo si ese resultado puntual no se pudo expandir. La API de simulación (`RagDocumentSearchSimulationService`, sección 3.5) hace lo mismo para su preview de retrieval crudo, para que sea representativo de lo que la tool real ve.
+
+**4. `top_k` configurable (P-38, no bloqueado por nada externo):** antes hardcodeado como `_DEFAULT_TOP_K = 5` en `rag_document_search.py`. Ahora se lee de `ConfigKey.VECTOR_K_SIMILILARITY`, siguiendo el mismo patrón ya establecido para otros parámetros (`DUCKDB_MAX_RETRIES`, `N_RELATED_MESSAGES`, etc. — `ChatAgentConfig`/`PromptConfigService.load_parameters_config`), inyectado al `parameters` dict compartido de todas las tools vía `build_parameters` (`deep_insight_utils.py`).
+
+**Nota importante — `edi-ai-proyectos-backend` (Java) y `edi-ai-operator` comparten la misma base de datos física** (mismo host/DB/tabla `parameters`/`Parameters`), pese a ser microservicios y repos distintos — confirmado por el usuario y verificado por consulta directa. La fila `VECTOR_K_SIMILILARITY` ya existía (creada para `AnalysisInfoManager.askInDocuments` en Java, ver P-35 en `pendientes.md`) con `value=4` — por eso se decidió **reusar esa misma fila en vez de crear un parámetro nuevo** (`RAG_DOCUMENT_SEARCH_TOP_K`, descartado tras confirmar el hallazgo). Implica que este valor queda compartido entre dos flujos de retrieval conceptualmente similares pero funcionalmente distintos (Java→`analysis-ai-service` y operator→`ai-rag-service-manager`, corpus/modelos de embeddings potencialmente distintos) — decisión deliberada, documentada para que quede claro que ajustar esta fila afecta a ambos flujos, no solo a uno. Si la fila llegara a faltar, cae a `4` (mismo default histórico) — sin acción requerida del usuario para que siga funcionando. La API de simulación usa el mismo valor, para que el preview del `top_k` no sea engañoso.
+
+#### Verificación real
+
+- **`ai-rag-service-manager`**: `ruff`/`mypy` limpios. Pruebas de integración reales (clases de producción reales — `DocumentEmbeddingService`, `RAGService` — solo Milvus/storage/embeddings mockeados, que requieren infraestructura externa): (1) sin `expand_context`, comportamiento idéntico a antes, sin `expandedText` en la respuesta; (2) con `expand_context` y un chunk con `start_index`/`end_index`, la ventana de contexto se calculó con el tamaño exacto esperado y solo re-descargó el archivo original **una vez** por documento (cache dentro del request); (3) con un chunk sin esa metadata, trajo correctamente los siguientes N chunks por `chunk_index`, ordenados; (4) un fallo simulado en la descarga de storage no rompió la búsqueda — el resultado afectado simplemente quedó sin `expandedText`, logueado, sin excepción propagada.
+- **`edi-ai-operator`**: import real de los 4 módulos tocados (`rag_service_client`, `rag_document_search`, `rag_document_search_simulation_service`, `response.py`) — limpio.
+- **Verificado en runtime real contra servicios en vivo, 2026-08-18** (el usuario desselló Vault local): con `ai-rag-service-manager` levantado vía `run-local-vault.sh` (GCS y OpenAI reales, sin mocks), se subió un documento de prueba real, se indexó con embeddings reales (`project_p37test`), y se buscó con `expandContext: true` — resultado real con `score=0.67`. El texto de prueba tenía la frase que respondía la consulta recién después del carácter 200 (rodeada de relleno): `textPreview` cortaba antes de llegar a ella, `expandedText` la trajo completa. Confirma re-descarga real de GCS, re-extracción real, y recorte real por offset de caracteres — el camino "nuevo" (`_expand_via_source_reslice`) funciona de punta a punta con infraestructura real, no solo con mocks. No se probó en este mismo pase el camino "legacy" (`_expand_via_adjacent_chunk_index`) contra datos reales sin `start_index`, ni el flujo completo agente→tool→respuesta del LLM (requiere Java + el flujo completo del agente arriba) — quedan como posible verificación adicional futura, no bloqueante.
+- **Hallazgo colateral, encontrado durante la verificación, no relacionado:** `PromptConfigService`/`load_parameters_config()` (usada también por P-38) falla con `sqlalchemy.exc.InvalidRequestError: ... failed to locate a name ('CatResources')` al intentar una consulta real contra la base de datos — un problema preexistente en `database/entities/document.py` (commit de 2026-05-13, "Add cat_resources and resource_type models with relationships", no tocado por este trabajo). No bloquea `_split_text`/import checks, pero sí bloqueó una prueba end-to-end contra la BD real de este flujo específico. Vale la pena que el equipo lo revise si está en desarrollo activo.
 
 ---
 

@@ -195,6 +195,16 @@ class Settings(BaseSettings):
         default=1000,
         validation_alias=AliasChoices("RAG_MAX_EMBEDDINGS_PER_DOCUMENT"),
     )
+    # "Adjacent chunks" (ver pendientes.md P-37): expansion de contexto
+    # opcional en search_similar_documents (expand_context=true).
+    rag_adjacent_window_chars: int = Field(
+        default=500,
+        validation_alias=AliasChoices("RAG_ADJACENT_WINDOW_CHARS"),
+    )
+    rag_adjacent_chunk_count: int = Field(
+        default=8,
+        validation_alias=AliasChoices("RAG_ADJACENT_CHUNK_COUNT"),
+    )
     rag_unique_code_list_limit: int = Field(
         default=10000,
         validation_alias=AliasChoices("RAG_UNIQUE_CODE_LIST_LIMIT"),

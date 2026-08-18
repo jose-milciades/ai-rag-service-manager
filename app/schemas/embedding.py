@@ -65,6 +65,14 @@ class SearchSimilarDocumentsRequest(BaseModel):
     query: str = Field(..., description="Consulta para búsqueda semántica")
     top_k: int = Field(default_factory=lambda: get_settings().rag_default_top_k, ge=1, le=100)
     metadata_filter: dict[str, Any] | None = Field(default=None, description="Filtros por metadata")
+    expand_context: bool = Field(
+        default=False,
+        description=(
+            "Si es true, cada resultado incluye expandedText: una ventana de contexto "
+            "ampliada alrededor del chunk (ver pendientes.md P-37, 'adjacent chunks'). "
+            "No afecta textPreview."
+        ),
+    )
 
 
 class EmbeddingChunkResponse(BaseModel):
@@ -84,6 +92,14 @@ class DocumentSummaryResponse(BaseModel):
     score: float | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     text_preview: str
+    expanded_text: str | None = Field(
+        default=None,
+        description=(
+            "Ventana de contexto ampliada alrededor del chunk, solo presente si el "
+            "request pidio expandContext=true (ver pendientes.md P-37). None en "
+            "cualquier otro caso, incluyendo list_documents (nunca lo pide)."
+        ),
+    )
 
 
 class SaveDocumentVecstoreResponse(BaseModel):

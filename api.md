@@ -217,8 +217,16 @@ Búsqueda semántica (embeddings reales, ver P-04/P-27) sobre una colección.
 | `query` | `string` | sí | |
 | `topK` | `int` | no | 1–100, default `settings.rag_default_top_k` (5) |
 | `metadataFilter` | `object \| null` | no | |
+| `expandContext` | `bool` | no | default `false`. Ver "Adjacent chunks" abajo (`pendientes.md` P-37). |
 
-**Respuesta 200** — `SearchSimilarDocumentsResponse`: `{ success, query, indexName, totalResults, results: [{ id, score, metadata, textPreview }], message? }` — mismo shape de item (`DocumentSummaryResponse`) que `list_documents`.
+**Respuesta 200** — `SearchSimilarDocumentsResponse`: `{ success, query, indexName, totalResults, results: [{ id, score, metadata, textPreview, expandedText }], message? }` — mismo shape de item (`DocumentSummaryResponse`) que `list_documents` (ahí `expandedText` siempre es `null`, ese endpoint nunca pide expansión).
+
+**Adjacent chunks (`expandContext`, P-37):** con `expandContext: true`, cada resultado además trae `expandedText` — una ventana de contexto más amplia alrededor del chunk que matcheó, en vez de solo el fragmento aislado. `textPreview` no cambia (sigue truncado a 200 caracteres, para no romper a nadie que no pida expansión). Dos estrategias, elegidas automáticamente según qué metadata tenga el chunk:
+
+- **Chunks indexados con `start_index`/`end_index`** (todo lo indexado desde este cambio en adelante): se re-descarga el documento original de storage, se re-extrae el texto, y se recorta una ventana exacta de `settings.rag_adjacent_window_chars` caracteres (default 500) a cada lado del chunk, por offset de caracteres — texto contiguo y limpio, no chunks pegados.
+- **Chunks sin esa metadata** (indexados antes de este cambio): se traen los siguientes `settings.rag_adjacent_chunk_count` chunks consecutivos (default 8, mismo `unique_code`, `chunkIndex` mayor) y se concatenan en orden.
+
+Si la expansión falla para un resultado puntual (ej. el archivo original ya no existe en el bucket), ese resultado simplemente no trae `expandedText` — no rompe el resto de la búsqueda. Consumidor real: la tool `rag_document_search` de `edi-ai-operator` (ver `integracion-operator-rag.md`).
 
 ---
 

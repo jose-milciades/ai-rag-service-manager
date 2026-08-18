@@ -76,6 +76,7 @@ class DocumentEmbeddingService:
         if not text_content.strip():
             raise ValueError("No text content could be extracted from the document")
 
+        normalized_parameters = self._normalize_parameters(list_parameters or [])
         metadata = {
             "file_name": file_name,
             "id_document": id_document,
@@ -83,11 +84,24 @@ class DocumentEmbeddingService:
             "bucket": bucket,
             "source": "document_upload",
         }
-        metadata.update(self._normalize_parameters(list_parameters or []))
+        metadata.update(normalized_parameters)
+
+        # VECTOR_CHUNK_SIZE/VECTOR_CHUNK_OVERLAP: parametros configurables por
+        # admin del lado de Java (tabla Parameters), reenviados aqui via
+        # list_parameters -- ver pendientes.md P-35. Antes solo quedaban
+        # guardados como metadata inerte; ahora tambien controlan el chunking
+        # real de este documento puntual, con fallback al default global de
+        # Settings si no vienen o no son un entero valido.
+        chunk_size = self._parse_int_parameter(normalized_parameters, "VECTOR_CHUNK_SIZE")
+        chunk_overlap = self._parse_int_parameter(normalized_parameters, "VECTOR_CHUNK_OVERLAP")
 
         rag_service = self._get_rag_service(index_name)
         chunks_created = rag_service.index_documents(
-            documents=[text_content], metadata=[metadata], chunk=True
+            documents=[text_content],
+            metadata=[metadata],
+            chunk=True,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
         )
 
         return {
@@ -223,8 +237,17 @@ class DocumentEmbeddingService:
         query: str,
         top_k: int,
         metadata_filter: dict[str, Any] | None = None,
+        expand_context: bool = False,
     ) -> dict[str, Any]:
-        """Ejecuta busqueda semantica sobre una coleccion y normaliza la respuesta."""
+        """Ejecuta busqueda semantica sobre una coleccion y normaliza la respuesta.
+
+        ``expand_context`` (opcional, default ``False``): "adjacent chunks"
+        -- ver pendientes.md P-37. Sin el flag, comportamiento identico al de
+        siempre. Con el flag, cada resultado incorpora ``expanded_text`` con
+        una ventana de contexto ampliada alrededor del chunk que matcheo
+        (``text_preview`` no cambia, sigue truncado a 200 caracteres, para no
+        alterar el contrato existente de nadie que no pida expansion).
+        """
         results = self._get_rag_service(index_name).search(
             query=query,
             top_k=top_k,
@@ -241,6 +264,8 @@ class DocumentEmbeddingService:
             }
             for result in results
         ]
+        if expand_context:
+            self._expand_context(index_name, results, formatted_results)
         return {
             "success": True,
             "query": query,
@@ -264,6 +289,117 @@ class DocumentEmbeddingService:
             return self._storage_client.download_from_url(url_download_file)
         return self._storage_client.download_from_bucket(file_name, bucket)
 
+    def _expand_context(
+        self,
+        index_name: str,
+        raw_results: list[dict[str, Any]],
+        formatted_results: list[dict[str, Any]],
+    ) -> None:
+        """Rellena ``expanded_text`` en cada resultado (ver pendientes.md P-37).
+
+        Falla de forma aislada por resultado: un error expandiendo uno (ej.
+        el archivo original ya no existe en storage) no debe tumbar la
+        busqueda completa ni afectar a los demas resultados -- se loguea y
+        ese resultado en particular simplemente no trae ``expanded_text``.
+        """
+        file_cache: dict[tuple[str, str | None], str] = {}
+        for raw, formatted in zip(raw_results, formatted_results):
+            try:
+                expanded = self._expand_single_result(index_name, raw["payload"], file_cache)
+                if expanded:
+                    formatted["expanded_text"] = expanded
+            except Exception:
+                logger.exception(
+                    "fallo expandiendo contexto para resultado id=%s en %s",
+                    raw.get("id"),
+                    index_name,
+                )
+
+    def _expand_single_result(
+        self,
+        index_name: str,
+        payload: dict[str, Any],
+        file_cache: dict[tuple[str, str | None], str],
+    ) -> str | None:
+        """Elige la estrategia de expansion segun la metadata disponible.
+
+        Chunks indexados con ``start_index``/``end_index`` (desde este
+        cambio en adelante) usan la ventana exacta por offset de caracteres
+        sobre el documento original. Chunks mas viejos, sin esa metadata,
+        caen al fallback por rango de ``chunk_index`` -- mismo criterio dual
+        que ya resuelve `edi-ai-analysis-ai` para el mismo problema.
+        """
+        if payload.get("start_index") is not None and payload.get("end_index") is not None:
+            return self._expand_via_source_reslice(payload, file_cache)
+        return self._expand_via_adjacent_chunk_index(index_name, payload)
+
+    def _expand_via_source_reslice(
+        self,
+        payload: dict[str, Any],
+        file_cache: dict[tuple[str, str | None], str],
+    ) -> str | None:
+        """Re-descarga el documento original y recorta una ventana exacta.
+
+        A diferencia de `edi-ai-analysis-ai` (que necesitaba guardar una
+        copia de texto plano aparte solo para esto), storage y extraccion de
+        texto ya viven en este mismo servicio -- se reusa el archivo
+        original tal cual se subio. ``file_cache`` evita re-descargar el
+        mismo archivo si varios resultados del mismo documento matchearon en
+        una sola busqueda.
+        """
+        file_name = payload.get("file_name")
+        if not file_name:
+            return None
+        bucket = payload.get("bucket")
+        cache_key = (str(file_name), str(bucket) if bucket else None)
+        if cache_key not in file_cache:
+            file_content = self._storage_client.download_from_bucket(file_name, bucket)
+            file_cache[cache_key] = self._extract_text_from_file(file_content, file_name)
+        full_text = file_cache[cache_key]
+
+        start_index = int(payload["start_index"])
+        end_index = int(payload["end_index"])
+        window = self._settings.rag_adjacent_window_chars
+        window_start = max(0, start_index - window)
+        window_end = min(len(full_text), end_index + window)
+        return full_text[window_start:window_end]
+
+    def _expand_via_adjacent_chunk_index(
+        self,
+        index_name: str,
+        payload: dict[str, Any],
+    ) -> str | None:
+        """Fallback para chunks sin ``start_index``: trae los siguientes N
+        chunks consecutivos (mismo ``unique_code``, ``chunk_index`` mayor)
+        via ``list_records`` y los concatena en orden.
+
+        Usa un filtro simple por igualdad (``unique_code``) y descarta el
+        resto en Python en vez de armar un filtro de rango en Milvus -- mas
+        barato que una segunda busqueda vectorial, y no requiere extender el
+        motor de filtros (``_build_filter_expression`` solo soporta
+        igualdad hoy).
+        """
+        unique_code = payload.get("unique_code")
+        chunk_index = payload.get("chunk_index")
+        if unique_code is None or chunk_index is None:
+            return None
+        records = self._vector_store_manager.list_records(
+            index_name,
+            limit=self._settings.rag_max_embeddings_per_document,
+            filter_conditions={"unique_code": unique_code},
+        )
+        chunk_count = self._settings.rag_adjacent_chunk_count
+        target_range = range(int(chunk_index), int(chunk_index) + chunk_count + 1)
+        adjacent = [
+            record
+            for record in records
+            if record["payload"].get("chunk_index") in target_range
+        ]
+        if not adjacent:
+            return None
+        adjacent.sort(key=lambda record: record["payload"].get("chunk_index", 0))
+        return "\n".join(record["payload"].get("text", "") for record in adjacent)
+
     @staticmethod
     def _normalize_parameters(list_parameters: list[dict[str, Any]]) -> dict[str, Any]:
         """Normaliza metadata arbitraria a un unico diccionario plano.
@@ -284,6 +420,24 @@ class DocumentEmbeddingService:
             else:
                 metadata.update(item)
         return metadata
+
+    @staticmethod
+    def _parse_int_parameter(parameters: dict[str, Any], key: str) -> int | None:
+        """Convierte un valor de ``list_parameters`` (siempre string, ver P-21) a int.
+
+        Devuelve ``None`` si la clave no vino o no es un entero valido -- en
+        ese caso ``RAGService`` cae al default global (``rag_chunk_size``/
+        ``rag_chunk_overlap``), igual que si Java nunca hubiera mandado el
+        parametro. Un valor malformado no debe tumbar la indexacion completa.
+        """
+        value = parameters.get(key)
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            logger.warning("parametro %s con valor no entero, se ignora: %r", key, value)
+            return None
 
     @staticmethod
     def _extract_text_from_file(file_content: bytes, file_name: str) -> str:

@@ -227,6 +227,7 @@ async def search_similar_documents(
             query=request.query,
             top_k=request.top_k,
             metadata_filter=request.metadata_filter,
+            expand_context=request.expand_context,
         )
         return SearchSimilarDocumentsResponse(**result)
     except Exception as exc:

@@ -75,18 +75,41 @@ class RAGService:
         documents: list[str],
         metadata: list[dict[str, Any]] | None = None,
         chunk: bool = True,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> int:
-        """Indexa documentos completos o sus chunks en la coleccion activa."""
+        """Indexa documentos completos o sus chunks en la coleccion activa.
+
+        ``chunk_size``/``chunk_overlap`` opcionales permiten un override por
+        request (ver pendientes.md P-35): sin ellos, cae al default global de
+        ``Settings``, igual que antes.
+        """
         metadata = metadata or [{} for _ in documents]
         texts_to_index: list[str] = []
         metadata_to_index: list[dict[str, Any]] = []
 
         for document, meta in zip(documents, metadata):
-            chunks = self._split_text(document) if chunk else [document]
-            for chunk_index, current_chunk in enumerate(chunks):
+            # start_index/end_index (offset de caracteres en el texto
+            # original) se persisten para poder reconstruir despues una
+            # ventana de contexto exacta alrededor de un chunk (ver
+            # pendientes.md P-37, "adjacent chunks"). Documentos indexados
+            # antes de este cambio no tendran estas dos claves -- se
+            # distingue por su ausencia, no se retro-completan.
+            chunks = (
+                self._split_text(document, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+                if chunk
+                else [(document, 0, len(document))]
+            )
+            for chunk_index, (current_chunk, start_index, end_index) in enumerate(chunks):
                 texts_to_index.append(current_chunk)
                 metadata_to_index.append(
-                    {**meta, "chunk_index": chunk_index, "text": current_chunk}
+                    {
+                        **meta,
+                        "chunk_index": chunk_index,
+                        "start_index": start_index,
+                        "end_index": end_index,
+                        "text": current_chunk,
+                    }
                 )
 
         vectors = self._embedding_provider.embed_documents(texts_to_index)
@@ -118,16 +141,36 @@ class RAGService:
         """Elimina registros de la coleccion activa que cumplan el filtro indicado."""
         return self._vector_store.delete_records(self.collection_name, filter_conditions)
 
-    def _split_text(self, text: str) -> list[str]:
-        """Divide un texto en chunks usando tamano y overlap configurados."""
-        chunk_size = max(self._settings.rag_chunk_size, 1)
-        overlap = min(self._settings.rag_chunk_overlap, chunk_size - 1) if chunk_size > 1 else 0
-        chunks: list[str] = []
+    def _split_text(
+        self,
+        text: str,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
+    ) -> list[tuple[str, int, int]]:
+        """Divide un texto en chunks usando tamano y overlap configurados.
+
+        ``chunk_size``/``chunk_overlap`` explicitos (por request) tienen
+        prioridad sobre el default global de ``Settings`` si vienen. Se
+        clampan a valores no negativos: un valor invalido/negativo mandado
+        por request no debe producir un comportamiento distinto a omitirlo.
+
+        Devuelve ``(chunk_text, start_index, end_index)`` por chunk --
+        ``start_index``/``end_index`` son offsets de caracteres sobre
+        ``text``, usados para "adjacent chunks" (ver pendientes.md P-37).
+        """
+        raw_chunk_size = chunk_size if chunk_size is not None else self._settings.rag_chunk_size
+        effective_chunk_size = max(raw_chunk_size, 1)
+        raw_overlap = chunk_overlap if chunk_overlap is not None else self._settings.rag_chunk_overlap
+        overlap = (
+            max(0, min(raw_overlap, effective_chunk_size - 1)) if effective_chunk_size > 1 else 0
+        )
+        chunks: list[tuple[str, int, int]] = []
         start = 0
         while start < len(text):
-            end = start + chunk_size
-            chunks.append(text[start:end])
+            end = start + effective_chunk_size
+            actual_end = min(end, len(text))
+            chunks.append((text[start:end], start, actual_end))
             if end >= len(text):
                 break
             start = end - overlap
-        return chunks or [text]
+        return chunks or [(text, 0, len(text))]
