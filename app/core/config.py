@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 
 from pydantic import AliasChoices, Field, field_validator
@@ -256,6 +257,18 @@ class Settings(BaseSettings):
         return value
 
 
+_DEFAULT_VAULT_CONFIG_PATHS = "common,ai-rag-service-manager,storage,llm_apis"
+
+
+def _vault_config_paths() -> list[str]:
+    """Paths KV v2 a mezclar desde Vault, mismo patron que
+    ``VAULT_CONFIG_PATHS`` en edi-ai-scheduled-worker/edi-ai-operator:
+    override explicito por env var, con el default historico de este
+    servicio si no se define."""
+    raw = os.getenv("VAULT_CONFIG_PATHS", _DEFAULT_VAULT_CONFIG_PATHS)
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 @lru_cache
 def get_settings() -> Settings:
     """Construye ``Settings`` usando Vault solo si ``USE_VAULT_CONFIG=true``.
@@ -270,6 +283,6 @@ def get_settings() -> Settings:
     """
     if is_vault_configured():
         vault = get_vault_client()
-        config = vault.load_configs(["common", "ai-rag-service-manager", "storage", "llm_apis"])
+        config = vault.load_configs(_vault_config_paths())
         return Settings(**config)
     return Settings()
