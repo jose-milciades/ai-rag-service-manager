@@ -164,6 +164,8 @@ Registrada en `TOOLS_REGISTRY` (`tools_registry.py`).
 
 **Sigue sin confirmarse**: que ambos sistemas usen literalmente el mismo valor numérico para el mismo proyecto real (los `.env` revisados de `edi-ai-operator` y Java apuntan a hosts de Postgres distintos, así que no se pudo verificar consultando ambas bases). La implementación asume que sí; si el equipo confirma que no, `_resolve_index_vecstore` en `rag_document_search.py` es el único lugar a ajustar.
 
+**Ambiente (`RAG_ENVIRONMENT`), transparente para esta tool (P-33, 2026-08-18):** el `index_vecstore` que arma `_resolve_index_vecstore` (`project_{company_id}`) se sanea a nombre de **colección** Milvus, una por proyecto. Por separado, `ai-rag-service-manager` resuelve internamente su propio ambiente (`edi-local`/`edi-dev`/`edi-stage`/`edi-prod`) y lo usa como **partición** dentro de esa colección — `edi-ai-operator` no manda ni necesita conocer el ambiente, cada llamada de `rag_document_search`/`rag_service_client` queda automáticamente acotada a la partición del ambiente donde corra `ai-rag-service-manager`. Detalle completo: `README.md` ("Organización de datos en Milvus") y `pendientes.md` P-33 en ese repo.
+
 ### 3.3 Quién indexa — sin cambios, ver decisión original
 
 Se confirmó (grep completo de `dev`) que `edi-ai-operator` no tiene ningún pipeline de indexación activo. La tool implementada solo busca — asume que Java ya indexó vía P-10. No se implementó indexación nueva en `edi-ai-operator`.

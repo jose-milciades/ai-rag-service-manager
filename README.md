@@ -163,6 +163,12 @@ ai-rag-service-manager/
 - `ConfigServerClient`: consulta Spring Config Server solo durante el startup.
 - `EurekaRegistrar`: registra y detiene el servicio en Eureka como parte del ciclo de vida.
 
+### Organización de datos en Milvus (colección = proyecto, partición = ambiente)
+
+Cada `indexVecstore`/`index_name` que manda un caller (Java, `edi-ai-operator`) es, sanitizado, el nombre de una **colección** Milvus — una por proyecto (ej. `project-93` → colección `project_93`). Dentro de esa colección, cada registro vive en una **partición** nombrada según `RAG_ENVIRONMENT` (`edi_local`/`edi_dev`/`edi_stage`/`edi_prod`, sanitizado igual que un nombre de colección) — resuelta enteramente por este servicio a partir de su propia config, **nunca** por el caller. Así, varios ambientes que llegaran a compartir una misma instancia Milvus (hoy no es el caso: cada ambiente corre su propia instancia, ver `pendientes.md` P-33) no mezclarían datos entre sí, y cada ambiente es administrable por separado en Attu (ver colección → pestaña "Partitions") sin tener que borrar la colección completa de un proyecto.
+
+Toda operación (indexar, buscar, listar, borrar) queda automáticamente acotada a la partición del ambiente activo — el caller nunca necesita saber ni mandar el ambiente, es transparente al contrato HTTP (ver `api.md`). Detalle completo, con el árbol comparado contra Pinecone y la tabla de metadata, en `pendientes.md` P-33.
+
 ## Alcance actual
 
 Incluido en esta versión:
@@ -202,6 +208,7 @@ Notas operativas:
 - `SPRING_CLOUD_CONFIG_URI` se consulta solo al arrancar la aplicación;
 - `VECTOR_DB_TYPE=milvus` requiere un Milvus real alcanzable en `MILVUS_HOST:MILVUS_PORT`; con `memory` (default) no hace falta nada externo;
 - `RAG_EMBEDDING_PROVIDER`: único valor soportado `openai` (requiere `OPENAI_API_KEY`) — decisión de negocio, ver `pendientes.md` P-19. Se resuelve/carga una sola vez al arrancar (`EmbeddingProvider`), no por request.
+- `RAG_ENVIRONMENT`: obligatorio, uno de `edi-local`/`edi-dev`/`edi-stage`/`edi-prod` (falla fuerte al arrancar con cualquier otro valor). Determina la partición Milvus de cada colección — ver "Organización de datos en Milvus" arriba.
 
 ## Ejecutar localmente
 

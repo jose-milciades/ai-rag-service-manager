@@ -94,6 +94,8 @@ Readiness real: devuelve `503` si alguna integración marcada como **crítica** 
 
 Archivo: `app/api/routes/embedding_controller.py`. Todos los endpoints son `POST` con body JSON, campos en `camelCase` (salvo `list_unique_code_documents`, ver abajo). Motor subyacente: `RAGService` (`app/services/rag/rag_service.py`), con embeddings reales vía API de OpenAI (único proveedor soportado, ver `pendientes.md` P-04/P-19) sobre `VECTOR_DB_TYPE=memory|milvus` (default en memoria; Milvus real disponible, ver `pendientes.md` P-08).
 
+**`indexVecstore` (todos los endpoints de abajo) — qué resuelve realmente:** el valor que manda el caller se sanitiza a un nombre de **colección** Milvus, una por proyecto (ej. `project-93` → `project_93`). El **ambiente** (`edi-local`/`edi-dev`/`edi-stage`/`edi-prod`, variable `RAG_ENVIRONMENT` de este servicio) **no lo manda el caller** — este servicio lo resuelve solo, y lo usa como nombre de **partición** dentro de esa colección. Toda operación (indexar/buscar/listar/borrar) queda automáticamente acotada a la partición del ambiente activo; nunca hay forma de que un caller vea o afecte datos de otro ambiente a través de este contrato. Detalle completo en `README.md` ("Organización de datos en Milvus") y `pendientes.md` P-33.
+
 ### `POST /api/v1/embedding/save_document_vecstore`
 
 Indexa un documento (texto extraído + chunking) en una colección vectorial.
@@ -105,7 +107,7 @@ Indexa un documento (texto extraído + chunking) en una colección vectorial.
 | `fileName` | `string` | sí | usado para inferir extensión/tipo de extracción |
 | `base64` | `string \| null` | no | contenido del archivo en base64 |
 | `idDocument` | `string` | sí | ID del documento; en el micro Java origen es el mismo valor que `uniqueCode`, no un ID numérico separado (ver `pendientes.md` P-20) |
-| `indexVecstore` | `string` | sí | nombre de colección destino |
+| `indexVecstore` | `string` | sí | proyecto → colección; ver nota de partición por ambiente arriba |
 | `uniqueCode` | `string` | sí | código lógico del documento (para agrupar chunks) |
 | `hasDocumentBase64` | `bool` | no (default `true`) | si `true`, se espera `base64` |
 | `urlDownloadFile` | `string \| null` | no | alternativa a `base64`; **validado contra SSRF desde P-01** |
@@ -128,7 +130,7 @@ Fuente del contenido, en orden de precedencia: `base64` (si `hasDocumentBase64=t
 
 ### `POST /api/v1/embedding/delete_index_vecstore`
 
-Elimina una colección completa. **Se ejecuta como `BackgroundTask`** — la respuesta 200 no garantiza que el borrado ya haya terminado.
+Elimina todos los datos del proyecto **para el ambiente activo** (borra la partición correspondiente, ver nota de partición por ambiente arriba) — no afecta datos de otros ambientes que compartan la misma colección/proyecto, ni borra la colección Milvus en sí (P-33; antes de esto sí borraba la colección completa). **Se ejecuta como `BackgroundTask`** — la respuesta 200 no garantiza que el borrado ya haya terminado.
 
 **Body** — `DeleteIndexVecstoreRequest`: `{ "indexVecstore": "string" }`
 
@@ -140,7 +142,7 @@ Elimina una colección completa. **Se ejecuta como `BackgroundTask`** — la res
 
 ### `POST /api/v1/embedding/delete_document`
 
-Elimina un único documento (todos sus chunks, filtrando por `idDocument`) sin afectar el resto de la colección. A diferencia de `delete_index_vecstore`, se ejecuta **síncrono** — la respuesta ya refleja el borrado. Agregado para cubrir `pendientes.md` P-22 (Java lo usa vía `deleteEmbeddingDocument`).
+Elimina un único documento (todos sus chunks, filtrando por `idDocument`) dentro de la partición del ambiente activo, sin afectar el resto de la colección ni otros ambientes. A diferencia de `delete_index_vecstore`, se ejecuta **síncrono** — la respuesta ya refleja el borrado. Agregado para cubrir `pendientes.md` P-22 (Java lo usa vía `deleteEmbeddingDocument`).
 
 **Body** — `DeleteDocumentVecstoreRequest`: `{ "indexVecstore": "string", "idDocument": "string" }`
 
@@ -189,7 +191,7 @@ Lista documentos lógicos (deduplicados por `unique_code`/`id_document`) de una 
 
 | Campo | Tipo | Requerido | Notas |
 |---|---|---|---|
-| `indexVecstore` | `string` | sí | |
+| `indexVecstore` | `string` | sí | ver nota de partición por ambiente arriba |
 | `limit` | `int` | no | 1–1000, default `settings.rag_default_list_limit` (100) |
 | `metadataFilter` | `object \| null` | no | filtro exacto por igualdad de campos de payload |
 
@@ -213,7 +215,7 @@ Búsqueda semántica (embeddings reales, ver P-04/P-27) sobre una colección.
 
 | Campo | Tipo | Requerido | Notas |
 |---|---|---|---|
-| `indexVecstore` | `string` | sí | |
+| `indexVecstore` | `string` | sí | ver nota de partición por ambiente arriba |
 | `query` | `string` | sí | |
 | `topK` | `int` | no | 1–100, default `settings.rag_default_top_k` (5) |
 | `metadataFilter` | `object \| null` | no | |
