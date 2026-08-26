@@ -1,36 +1,34 @@
-"""HTTP controller for document embedding and RAG query operations.
+"""HTTP controller for document embedding operations.
 
 Este archivo pertenece a la capa de API. Su rol es exponer endpoints HTTP para
-indexacion, consulta y recuperacion de contexto RAG.
+indexacion, consulta y recuperacion de contexto documental.
 
-No implementa logica de negocio compleja. Todo el trabajo real se delega a:
-
-- ``DocumentEmbeddingService`` para indexacion y busqueda documental
-- ``RAGAgent`` para construir respuestas basadas en contexto recuperado
+No implementa logica de negocio compleja. Todo el trabajo real se delega a
+``DocumentEmbeddingService``.
 """
 
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, status
 
-from app.api.dependencies.services import get_document_embedding_service, get_rag_agent
+from app.api.dependencies.services import get_document_embedding_service
 from app.schemas.embedding import (
+    DeleteDocumentVecstoreRequest,
+    DeleteDocumentVecstoreResponse,
     DeleteIndexVecstoreRequest,
     GetEmbeddingsByUniqueCodeRequest,
     GetEmbeddingsByUniqueCodeResponse,
     ListDocumentsRequest,
     ListDocumentsResponse,
     OperationStatusResponse,
-    RagQueryRequest,
-    RagQueryResponse,
     SaveDocumentVecstoreRequest,
     SaveDocumentVecstoreResponse,
     SearchSimilarDocumentsRequest,
     SearchSimilarDocumentsResponse,
+    UniqueCodeDocumentResponse,
 )
 from app.services.embedding.document_embedding_service import DocumentEmbeddingService
-from app.services.rag.rag_agent import RAGAgent
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +39,6 @@ EmbeddingServiceDep = Annotated[
     DocumentEmbeddingService,
     Depends(get_document_embedding_service),
 ]
-RagAgentDep = Annotated[RAGAgent, Depends(get_rag_agent)]
 
 
 @router.post(
@@ -72,7 +69,7 @@ async def save_document_vecstore(
         )
         return SaveDocumentVecstoreResponse(**result)
     except Exception as exc:
-        logger.exception("error saving document to vecstore", exc_info=True)
+        logger.exception("error saving document to vecstore")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error saving document: {exc}",
@@ -101,10 +98,67 @@ async def delete_index_vecstore(
             codigo=200,
         )
     except Exception as exc:
-        logger.exception("error deleting index", exc_info=True)
+        logger.exception("error deleting index")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting index: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/delete_document",
+    status_code=status.HTTP_200_OK,
+    summary="Delete a single document from a vector store index",
+)
+async def delete_document(
+    request: DeleteDocumentVecstoreRequest,
+    service: EmbeddingServiceDep,
+) -> DeleteDocumentVecstoreResponse:
+    """Elimina un unico documento (todos sus chunks) sin afectar el resto del indice.
+
+    Complementa a ``/delete_index_vecstore`` (que borra la coleccion completa)
+    para el caso de uso que hoy usa Java via ``deleteEmbeddingDocument`` — ver
+    pendientes.md P-22. Se ejecuta sincrono porque, a diferencia de borrar una
+    coleccion entera, es una operacion acotada por filtro.
+    """
+    try:
+        result = service.delete_document(
+            index_name=request.index_vecstore,
+            id_document=request.id_document,
+        )
+        return DeleteDocumentVecstoreResponse(**result)
+    except Exception as exc:
+        logger.exception("error deleting document")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error deleting document: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/list_unique_code_documents",
+    status_code=status.HTTP_200_OK,
+    summary="List a lightweight summary of unique documents in a namespace",
+)
+async def list_unique_code_documents(
+    service: EmbeddingServiceDep,
+    namespace: Annotated[str, Body(..., description="Nombre del índice/colección")],
+) -> list[UniqueCodeDocumentResponse]:
+    """Devuelve un listado liviano (namespace/codigo/fileName/id/nombreDocumento).
+
+    Contrato pensado para ser un reemplazo directo de ``getListUniqueCodeDocuments``
+    en el micro Java origen — ver pendientes.md P-23. El body es un string JSON
+    plano (no un objeto) a propósito, para que Java pueda apuntar la URL a este
+    servicio sin tener que cambiar cómo arma el request.
+    """
+    try:
+        results = service.list_unique_code_documents(namespace=namespace)
+        return [UniqueCodeDocumentResponse(**item) for item in results]
+    except Exception as exc:
+        logger.exception("error listing unique code documents")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error listing unique code documents: {exc}",
         ) from exc
 
 
@@ -126,7 +180,7 @@ async def list_documents(
         )
         return ListDocumentsResponse(**result)
     except Exception as exc:
-        logger.exception("error listing documents", exc_info=True)
+        logger.exception("error listing documents")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error listing documents: {exc}",
@@ -150,7 +204,7 @@ async def get_embeddings_by_unique_code(
         )
         return GetEmbeddingsByUniqueCodeResponse(**result)
     except Exception as exc:
-        logger.exception("error getting embeddings", exc_info=True)
+        logger.exception("error getting embeddings")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error getting embeddings: {exc}",
@@ -173,40 +227,12 @@ async def search_similar_documents(
             query=request.query,
             top_k=request.top_k,
             metadata_filter=request.metadata_filter,
+            expand_context=request.expand_context,
         )
         return SearchSimilarDocumentsResponse(**result)
     except Exception as exc:
-        logger.exception("error searching documents", exc_info=True)
+        logger.exception("error searching documents")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error searching documents: {exc}",
-        ) from exc
-
-
-@router.post(
-    "/rag_query",
-    status_code=status.HTTP_200_OK,
-    summary="Answer a query using the configured RAG agent",
-)
-async def rag_query(
-    request: RagQueryRequest,
-    rag_agent: RagAgentDep,
-) -> RagQueryResponse:
-    """Resuelve una consulta usando el agente RAG configurado.
-
-    Este endpoint no hace retrieval directamente; solo traduce la solicitud HTTP
-    y delega en ``RAGAgent`` la recuperacion de contexto y armado de respuesta.
-    """
-    try:
-        result = rag_agent.answer_with_context(
-            question=request.question,
-            top_k=request.top_k,
-            department=request.department,
-        )
-        return RagQueryResponse(**result)
-    except Exception as exc:
-        logger.exception("error executing rag query", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error executing rag query: {exc}",
         ) from exc

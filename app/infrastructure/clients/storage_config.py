@@ -18,8 +18,10 @@ class StorageConfig:
         self.google_json_cred = settings.google_creds_json
         self.credentials_info = self._load_credentials_info()
         self.default_bucket_name = settings.storage_default_bucket_name
-        self.public_bucket_name = getattr(settings, "storage_public_bucket_name", None)
-        self.project_id = settings.storage_project_id or self._get_project_id_from_credentials_info()
+        self.public_bucket_name = settings.storage_public_bucket_name
+        self.project_id = (
+            settings.storage_project_id or self._get_project_id_from_credentials_info()
+        )
         self.chunk_upload_temp_dir = settings.storage_chunk_upload_temp_dir
         self._validate_credentials_configuration()
 
@@ -43,7 +45,7 @@ class StorageConfig:
             raise ValueError("GOOGLE_CREDS_JSON must contain a valid JSON object") from exc
 
         if not isinstance(credentials, dict):
-            raise ValueError("GOOGLE_CREDS_JSON must contain a JSON object")
+            raise TypeError("GOOGLE_CREDS_JSON must contain a JSON object")
 
         return credentials
 

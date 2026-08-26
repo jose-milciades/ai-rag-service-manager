@@ -1,13 +1,27 @@
 import os
+from functools import lru_cache
+
 import hvac
 import urllib3
-
-from functools import lru_cache
 from urllib3.exceptions import InsecureRequestWarning
 
 
 def _is_truthy(value: str | None) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def is_vault_configured() -> bool:
+    """Indica si se debe usar Vault, igual patron que ``EUREKA_ENABLED`` y
+    ``USE_SPRING_CLOUD_CONFIG``: una variable explicita, no una inferencia
+    por presencia de otras variables. Por defecto false, para que trabajo
+    local no dependa de tener un Vault corriendo.
+
+    Se usa antes de intentar construir un ``VaultClient`` (ver
+    ``app.core.config.get_settings``). Si es true pero falta
+    ``VAULT_ADDR``/``VAULT_TOKEN``, ``VaultClient`` falla fuerte con un
+    mensaje claro lista lo que falta, en vez de caer en silencio a `.env`.
+    """
+    return _is_truthy(os.getenv("USE_VAULT_CONFIG"))
 
 
 def _configure_tls_warning_suppression(vault_skip_verify: bool) -> None:
@@ -16,7 +30,7 @@ def _configure_tls_warning_suppression(vault_skip_verify: bool) -> None:
 
 
 class VaultClient:
-    def __init__(self):
+    def __init__(self) -> None:
         vault_addr = os.getenv("VAULT_ADDR")
         vault_token = os.getenv("VAULT_TOKEN")
         vault_cacert = os.getenv("VAULT_CACERT")
@@ -75,5 +89,5 @@ class VaultClient:
 
 
 @lru_cache
-def get_vault_client():
+def get_vault_client() -> VaultClient:
     return VaultClient()

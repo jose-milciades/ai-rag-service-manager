@@ -13,7 +13,7 @@ from app.core.config import Settings
 logger = logging.getLogger(__name__)
 
 try:
-    import py_eureka_client.eureka_client as eureka_client
+    from py_eureka_client import eureka_client
 except ImportError:
     eureka_client = None
 
@@ -40,14 +40,16 @@ class EurekaRegistrar:
 
         for attempt in range(1, self._settings.eureka_register_max_retries + 1):
             try:
-                logger.info("registering %s in Eureka (attempt %s)", self._settings.eureka_app_name, attempt)
+                logger.info(
+                    "registering %s in Eureka (attempt %s)", self._settings.app_name, attempt
+                )
                 await eureka_client.init_async(
                     eureka_server=self._settings.eureka_server_url,
-                    app_name=self._settings.eureka_app_name,
+                    app_name=self._settings.app_name,
                     instance_port=self._settings.app_port,
                     instance_host=self._settings.eureka_instance_host,
                     instance_ip=self._settings.eureka_instance_ip,
-                    instance_id=f"{self._settings.eureka_app_name}:{self._settings.app_port}",
+                    instance_id=f"{self._settings.app_name}:{self._settings.app_port}",
                 )
                 self._registered = True
                 return {
@@ -55,7 +57,7 @@ class EurekaRegistrar:
                     "registered": True,
                     "server": self._settings.eureka_server_url,
                 }
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - reintento con backoff: cualquier falla de esta libreria de terceros debe permitir el siguiente intento
                 logger.error("error registering in Eureka: %s", exc)
                 await asyncio.sleep(self._settings.eureka_register_retry_delay * attempt)
 
@@ -70,5 +72,5 @@ class EurekaRegistrar:
         if self._registered and eureka_client is not None:
             try:
                 await eureka_client.stop_async()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - shutdown best-effort: no debe impedir el apagado del proceso
                 logger.warning("error stopping Eureka client: %s", exc)

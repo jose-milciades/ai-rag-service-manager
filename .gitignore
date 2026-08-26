@@ -19,6 +19,9 @@ build/
 .envrc
 !.env.example
 
+# Script local con VAULT_TOKEN real embebido -- nunca commitear
+run-local-vault.sh
+
 # Ignore credentials and secret material
 secrets/
 company-secrets/
