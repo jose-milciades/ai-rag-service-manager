@@ -360,14 +360,24 @@ class DocumentEmbeddingService:
         original tal cual se subio. ``file_cache`` evita re-descargar el
         mismo archivo si varios resultados del mismo documento matchearon en
         una sola busqueda.
+
+        El blob en storage se sube con nombre ``unique_code`` (ver
+        StorageController/`/storage/upload`), no con el nombre humano del
+        archivo -- `file_name` es solo metadata para mostrar en UI y para que
+        `_extract_text_from_file` sepa que parser usar segun la extension.
+        Descargar por `file_name` siempre fallaba con FileNotFoundError
+        (confirmado en real: bucket `server_edi_stage_bucket`, archivo real
+        subido como blob `mtd6nyv4bjmnepck`, nunca como
+        "Politica de privacidad ARA (prueba E2E).pdf").
         """
         file_name = payload.get("file_name")
-        if not file_name:
+        unique_code = payload.get("unique_code")
+        if not file_name or not unique_code:
             return None
         bucket = payload.get("bucket")
-        cache_key = (str(file_name), str(bucket) if bucket else None)
+        cache_key = (str(unique_code), str(bucket) if bucket else None)
         if cache_key not in file_cache:
-            file_content = self._storage_client.download_from_bucket(file_name, bucket)
+            file_content = self._storage_client.download_from_bucket(unique_code, bucket)
             file_cache[cache_key] = self._extract_text_from_file(file_content, file_name)
         full_text = file_cache[cache_key]
 
