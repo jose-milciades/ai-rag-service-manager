@@ -77,7 +77,11 @@ extend-immutable-calls = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
+testpaths = ["test"]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["test/*", ".venv/*"]
 
 [tool.mypy]
 # python_version sigue requires-python (3.11) y el Dockerfile, no la version

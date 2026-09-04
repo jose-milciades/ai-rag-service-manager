@@ -8,6 +8,6 @@ fi
 
 # Genera coverage.xml para que sonar-scanner lo suba (sonar.python.coverage.reportPaths).
 # No bloquea el analisis si algun test falla: igual se sube lo que se pudo cubrir.
-.venv/bin/python -m pytest tests --continue-on-collection-errors -q --cov=app --cov-report=term-missing --cov-report=xml:coverage.xml || true
+.venv/bin/python -m pytest test --continue-on-collection-errors -q --cov=app --cov-report=term-missing --cov-report=xml:coverage.xml || true
 
 sonar-scanner -Dsonar.token="$SONAR_TOKEN" -X

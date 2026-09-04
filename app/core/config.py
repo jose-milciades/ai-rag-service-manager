@@ -123,6 +123,14 @@ class Settings(BaseSettings):
     vector_db_type: str = Field(default="memory", validation_alias=AliasChoices("VECTOR_DB_TYPE"))
     milvus_host: str = Field(default="localhost", validation_alias=AliasChoices("MILVUS_HOST"))
     milvus_port: int = Field(default=19530, validation_alias=AliasChoices("MILVUS_PORT"))
+    # Esquema de conexion a Milvus: "http" para desarrollo local (default) y
+    # "https" para instancias con TLS habilitado en produccion/staging.
+    # Configurable via MILVUS_URI_SCHEME para evitar hardcodear "http://" en
+    # el codigo (Sonar S5332 -- clear-text protocol hotspot).
+    milvus_uri_scheme: str = Field(
+        default="http",
+        validation_alias=AliasChoices("MILVUS_URI_SCHEME"),
+    )
     milvus_user: str | None = Field(default=None, validation_alias=AliasChoices("MILVUS_USER"))
     milvus_password: str | None = Field(
         default=None,
