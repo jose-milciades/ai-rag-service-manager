@@ -90,7 +90,14 @@ class StorageService:
             logger.exception("failed to read uploaded file %r for storage upload", file.filename)
             return UploadFileResponse(success=False)
 
-        success = self._storage_client.upload_bytes(
+        # asyncio.to_thread: upload_bytes es una llamada sincrona y puede
+        # tardar minutos con archivos grandes -- sin esto, bloquea el event
+        # loop entero de uvicorn mientras dura (ver storage_client.py,
+        # 2026-09-07: sospecha de que eso agrava los timeouts de escritura
+        # a GCS bajo carga local, al no poder atender nada mas mientras
+        # tanto).
+        success = await asyncio.to_thread(
+            self._storage_client.upload_bytes,
             file_bytes=file_bytes,
             file_name=file.filename,
             content_type=file.content_type,
@@ -173,7 +180,11 @@ class StorageService:
         if len(part_files) < total_chunks:
             return ChunkUploadResponse(consolidated=False, success=True)
 
-        success, file_bytes = self._consolidate_chunks(
+        # asyncio.to_thread: igual que en upload_file(), el merge en disco
+        # mas la subida a GCS son sincronos y pueden tardar -- no deben
+        # bloquear el event loop.
+        success, file_bytes = await asyncio.to_thread(
+            self._consolidate_chunks,
             upload_dir=upload_dir,
             index_dir=index_dir,
             part_files=part_files,
@@ -244,7 +255,8 @@ class StorageService:
             )
             return UploadPublicFileResponse(success=False, url=None)
 
-        success, url = self._storage_client.upload_public_bytes(
+        success, url = await asyncio.to_thread(
+            self._storage_client.upload_public_bytes,
             file_bytes=file_bytes,
             content_type=file.content_type,
         )

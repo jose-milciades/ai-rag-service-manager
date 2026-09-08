@@ -149,6 +149,19 @@ class TestUploadBytes:
         result = client.upload_bytes(b"data", "file.txt", None, "stored.txt")
         assert result is False
 
+    def test_passes_explicit_timeout_and_retry_to_gcs(self) -> None:
+        """2026-09-07: default del SDK (~120s retry deadline) es corto para
+        archivos grandes -- upload_bytes debe pedir explicitamente mas
+        margen, no heredar el default."""
+        client = self._make_upload_client()
+
+        client.upload_bytes(b"data", "file.txt", "text/plain", "stored.txt")
+
+        mock_blob = client._client.bucket.return_value.blob.return_value
+        call_kwargs = mock_blob.upload_from_string.call_args.kwargs
+        assert call_kwargs["timeout"] == 300
+        assert call_kwargs["retry"].deadline == pytest.approx(300.0)
+
 
 # ---------------------------------------------------------------------------
 # upload_public_bytes
