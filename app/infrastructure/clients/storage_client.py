@@ -18,6 +18,25 @@ from app.infrastructure.clients.storage_config import StorageConfig
 
 logger = logging.getLogger(__name__)
 
+# Default del SDK (~120s de retry deadline) es corto para archivos de
+# decenas/cientos de MB: una escritura que se corta a medio camino
+# (connection aborted / write timeout) agota ese presupuesto reintentando
+# antes de completar, aunque la subida en si misma hubiera terminado bien
+# con un poco mas de margen. Confirmado en produccion local (2026-09-07):
+# el mismo pipeline via frontend no falla ni con 130MB, pero el proceso
+# automatico si -- la maquina bajo carga (varios servicios + IDEs locales)
+# hace mas probable que se corte una escritura larga.
+_UPLOAD_TIMEOUT_SECONDS = 300
+_UPLOAD_RETRY_DEADLINE_SECONDS = 300.0
+
+
+def _upload_retry() -> Any:
+    # Import perezoso, mismo motivo que _get_client(): evita que este modulo
+    # dependa duro de google-api-core solo para construir un Retry.
+    from google.api_core.retry import Retry
+
+    return Retry(deadline=_UPLOAD_RETRY_DEADLINE_SECONDS)
+
 
 def _ensure_public_http_url(url: str) -> None:
     """Bloquea esquemas y destinos que habilitarian SSRF via descarga remota.
@@ -110,6 +129,8 @@ class StorageClient:
             blob.upload_from_string(
                 file_bytes,
                 content_type=resolved_content_type or "application/octet-stream",
+                timeout=_UPLOAD_TIMEOUT_SECONDS,
+                retry=_upload_retry(),
             )
             return True
         except Exception as exc:  # noqa: BLE001 - operacion tecnica de GCS: la falla se convierte en success=False para el llamador
@@ -130,7 +151,12 @@ class StorageClient:
         blob_name = str(uuid4())
         blob = self._get_bucket(public_bucket_name).blob(blob_name)
         try:
-            blob.upload_from_string(file_bytes, content_type=content_type)
+            blob.upload_from_string(
+                file_bytes,
+                content_type=content_type,
+                timeout=_UPLOAD_TIMEOUT_SECONDS,
+                retry=_upload_retry(),
+            )
             return True, f"https://storage.googleapis.com/{public_bucket_name}/{blob_name}"
         except Exception as exc:  # noqa: BLE001 - operacion tecnica de GCS: la falla se convierte en success=False para el llamador
             logger.error("public storage upload failed for %s: %s", blob_name, exc)

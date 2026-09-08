@@ -30,7 +30,9 @@ _ID_MAX_LENGTH = 64
 # validacion, una clave con comillas/operadores podria escapar la expresion
 # esperada (inyeccion de filtro) — igual que se valida la URL en
 # storage_client.py para evitar SSRF, aqui se valida la forma de la clave.
-_SAFE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
+# re.ASCII: \w sin este flag acepta letras unicode, lo que romperia la
+# validacion de seguridad -- Milvus solo acepta identificadores ASCII puros.
+_SAFE_KEY_PATTERN = re.compile(r"^\w+$", re.ASCII)
 
 
 def _build_filter_expression(filter_conditions: dict[str, Any] | None) -> str:
@@ -56,7 +58,7 @@ class MilvusVectorStore(VectorStoreInterface):
         if self._client is not None:
             return self._client
 
-        uri = f"http://{self._settings.milvus_host}:{self._settings.milvus_port}"
+        uri = f"{self._settings.milvus_uri_scheme}://{self._settings.milvus_host}:{self._settings.milvus_port}"
         client_kwargs: dict[str, Any] = {"uri": uri}
         if self._settings.milvus_db_name:
             client_kwargs["db_name"] = self._settings.milvus_db_name

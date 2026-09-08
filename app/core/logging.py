@@ -79,6 +79,37 @@ def configure_logging() -> None:
                     "handlers": ["console", "file"],
                     "propagate": False,
                 },
+                # Loggers HTTP de las libs cliente (GCS, config server, OpenAI,
+                # Milvus). Se fijan en DEBUG independientemente del nivel
+                # general de la app para poder ver el request/response
+                # completo (incluye status code, p.ej. 401) sin necesitar
+                # APP_LOG_LEVEL=DEBUG global, que tambien vuelve verboso el
+                # resto de la app.
+                "httpx": {
+                    "level": "DEBUG",
+                    "handlers": ["console", "file"],
+                    "propagate": False,
+                },
+                "httpcore": {
+                    "level": "DEBUG",
+                    "handlers": ["console", "file"],
+                    "propagate": False,
+                },
+                "urllib3": {
+                    "level": "DEBUG",
+                    "handlers": ["console", "file"],
+                    "propagate": False,
+                },
+                "google.auth.transport.requests": {
+                    "level": "DEBUG",
+                    "handlers": ["console", "file"],
+                    "propagate": False,
+                },
+                "openai": {
+                    "level": "DEBUG",
+                    "handlers": ["console", "file"],
+                    "propagate": False,
+                },
             },
         }
     )
