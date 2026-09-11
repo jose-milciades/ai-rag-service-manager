@@ -223,8 +223,17 @@ class StorageService:
 
     async def get_file(self, name: str, bucket: str | None) -> tuple[bytes, str | None]:
         try:
-            print(f"Getting file {name} from bucket {bucket}")
-            return self._storage_client.download_with_metadata(
+            # asyncio.to_thread: mismo motivo que en upload_file() -- download_with_metadata
+            # es sincrona (3 llamadas bloqueantes a GCS: exists/reload/download_as_bytes) y
+            # sin esto bloquea el event loop entero de uvicorn mientras dura. Con un solo
+            # worker, eso deja al proceso entero sin poder atender NINGUN otro request
+            # (ni siquiera health checks) durante toda la descarga -- explica por que el
+            # mismo archivo que antes tardaba segundos, bajo carga concurrente, puede hacer
+            # que otro request en cola tarde varios minutos y termine en ReadTimeout del
+            # lado del caller aunque la descarga individual no sea lenta (ver pendientes.md
+            # P-42).
+            return await asyncio.to_thread(
+                self._storage_client.download_with_metadata,
                 filename=name,
                 bucket_name=bucket,
             )
