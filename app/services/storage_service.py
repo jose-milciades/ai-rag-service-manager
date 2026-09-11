@@ -121,9 +121,14 @@ class StorageService:
             and trigger.background_tasks is not None
         ):
             index_name = self._resolve_vectorization_index(project_id, trigger.code_type_document)
+            # Encode now and drop file_bytes: BackgroundTasks keeps its kwargs alive for the
+            # full vectorization call, so holding the raw bytes there too doubles peak memory
+            # for large files.
+            base64_content = base64.b64encode(file_bytes).decode("utf-8")
+            del file_bytes
             trigger.background_tasks.add_task(
                 self._vectorize_uploaded_file,
-                file_bytes=file_bytes,
+                base64_content=base64_content,
                 file_name=file.filename or name,
                 unique_code=trigger.unique_code,
                 id_document=trigger.id_document or trigger.unique_code,
@@ -201,9 +206,11 @@ class StorageService:
             and trigger.background_tasks is not None
         ):
             index_name = self._resolve_vectorization_index(project_id, trigger.code_type_document)
+            base64_content = base64.b64encode(file_bytes).decode("utf-8")
+            del file_bytes
             trigger.background_tasks.add_task(
                 self._vectorize_uploaded_file,
-                file_bytes=file_bytes,
+                base64_content=base64_content,
                 file_name=file_name,
                 unique_code=trigger.unique_code,
                 id_document=trigger.id_document or trigger.unique_code,
@@ -216,6 +223,7 @@ class StorageService:
 
     async def get_file(self, name: str, bucket: str | None) -> tuple[bytes, str | None]:
         try:
+            print(f"Getting file {name} from bucket {bucket}")
             return self._storage_client.download_with_metadata(
                 filename=name,
                 bucket_name=bucket,
@@ -283,7 +291,7 @@ class StorageService:
 
     async def _vectorize_uploaded_file(
         self,
-        file_bytes: bytes,
+        base64_content: str,
         file_name: str,
         unique_code: str,
         id_document: str,
@@ -311,7 +319,7 @@ class StorageService:
             result = await asyncio.to_thread(
                 self._document_embedding_service.save_document_to_vecstore,
                 file_name=file_name,
-                base64_content=base64.b64encode(file_bytes).decode("utf-8"),
+                base64_content=base64_content,
                 id_document=id_document,
                 index_name=index_name,
                 unique_code=unique_code,

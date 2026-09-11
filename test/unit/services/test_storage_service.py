@@ -520,10 +520,11 @@ class TestVectorizeUploadedFile:
         service = _make_service(mock_settings, tmp_path, embedding_service=emb)
 
         file_bytes = b"pdf content"
+        base64_content = base64.b64encode(file_bytes).decode()
         with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
             mock_to_thread.return_value = {"success": True}
             await service._vectorize_uploaded_file(
-                file_bytes=file_bytes,
+                base64_content=base64_content,
                 file_name="doc.pdf",
                 unique_code="uc1",
                 id_document="id1",
@@ -534,7 +535,7 @@ class TestVectorizeUploadedFile:
         mock_to_thread.assert_called_once()
         call_kwargs = mock_to_thread.call_args.kwargs
         assert call_kwargs["has_document_base64"] is True
-        assert call_kwargs["base64_content"] == base64.b64encode(file_bytes).decode()
+        assert call_kwargs["base64_content"] == base64_content
 
     @pytest.mark.asyncio
     async def test_exception_is_logged_not_raised(
@@ -546,7 +547,7 @@ class TestVectorizeUploadedFile:
             mock_to_thread.side_effect = RuntimeError("embedding error")
             # Should NOT raise
             await service._vectorize_uploaded_file(
-                file_bytes=b"data",
+                base64_content="ZGF0YQ==",
                 file_name="f.txt",
                 unique_code="uc1",
                 id_document="id1",
