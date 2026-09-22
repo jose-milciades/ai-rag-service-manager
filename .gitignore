@@ -68,3 +68,4 @@ env/
 .sonar/
 .sonarlint/
 .sonar-scanner-dump.properties
+.bob/rules-plan/Bob.code-workspace
