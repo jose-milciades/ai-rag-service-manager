@@ -8,7 +8,10 @@ from fastapi import APIRouter
 
 from app.api.routes import (
     embedding_controller,
+    extraction_controller,
     health_controller,
+    ingestion_controller,
+    retrieval_controller,
     storage_controller,
 )
 
@@ -16,3 +19,6 @@ api_router = APIRouter()
 api_router.include_router(health_controller.router)
 api_router.include_router(embedding_controller.router)
 api_router.include_router(storage_controller.router)
+api_router.include_router(retrieval_controller.router)
+api_router.include_router(ingestion_controller.router)
+api_router.include_router(extraction_controller.router)

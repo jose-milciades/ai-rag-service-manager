@@ -7,15 +7,14 @@ usa el resto de la aplicacion (``record["payload"].get(...)``) sin tener que
 declarar una columna Milvus por cada clave de metadata posible.
 """
 
-import json
 import logging
-import re
 from typing import Any
 from uuid import uuid4
 
 from pymilvus import DataType, MilvusClient
 
 from app.core.config import Settings
+from app.infrastructure.vector_store.filters import build_milvus_expression
 from app.infrastructure.vector_store.vector_store_interface import VectorStoreInterface
 
 logger = logging.getLogger(__name__)
@@ -25,26 +24,9 @@ _VECTOR_FIELD = "vector"
 _ID_FIELD = "id"
 _ID_MAX_LENGTH = 64
 
-# Los nombres de clave en filter_conditions se interpolan directo en la
-# expresion de filtro de Milvus (``payload["<key>"] == ...``). Sin esta
-# validacion, una clave con comillas/operadores podria escapar la expresion
-# esperada (inyeccion de filtro) — igual que se valida la URL en
-# storage_client.py para evitar SSRF, aqui se valida la forma de la clave.
-# re.ASCII: \w sin este flag acepta letras unicode, lo que romperia la
-# validacion de seguridad -- Milvus solo acepta identificadores ASCII puros.
-_SAFE_KEY_PATTERN = re.compile(r"^\w+$", re.ASCII)
-
-
 def _build_filter_expression(filter_conditions: dict[str, Any] | None) -> str:
-    if not filter_conditions:
-        return ""
-
-    clauses = []
-    for key, value in filter_conditions.items():
-        if not _SAFE_KEY_PATTERN.match(key):
-            raise ValueError(f"Unsupported filter key: {key!r}")
-        clauses.append(f'{_PAYLOAD_FIELD}["{key}"] == {json.dumps(value)}')
-    return " and ".join(clauses)
+    """Igualdad por clave (contrato original) y operadores ``$`` (ver ``filters``)."""
+    return build_milvus_expression(filter_conditions, _PAYLOAD_FIELD)
 
 
 class MilvusVectorStore(VectorStoreInterface):

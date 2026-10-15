@@ -14,6 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.config import Settings
+from app.infrastructure.vector_store.filters import matches
 from app.infrastructure.vector_store.milvus_vector_store import MilvusVectorStore
 from app.infrastructure.vector_store.vector_store_interface import VectorStoreInterface
 
@@ -107,11 +108,7 @@ class InMemoryVectorStore(VectorStoreInterface):
             records = [record for record in records if record.get("_partition") == partition_name]
         if filter_conditions:
             records = [
-                record
-                for record in records
-                if all(
-                    record["payload"].get(key) == value for key, value in filter_conditions.items()
-                )
+                record for record in records if matches(record["payload"], filter_conditions)
             ]
         return records[:limit]
 
@@ -139,9 +136,7 @@ class InMemoryVectorStore(VectorStoreInterface):
         kept, deleted = [], 0
         for record in records:
             matches_partition = not partition_name or record.get("_partition") == partition_name
-            matches_filter = all(
-                record["payload"].get(key) == value for key, value in filter_conditions.items()
-            )
+            matches_filter = matches(record["payload"], filter_conditions)
             if matches_partition and matches_filter:
                 deleted += 1
             else:

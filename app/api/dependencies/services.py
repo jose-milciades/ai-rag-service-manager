@@ -7,6 +7,7 @@ from app.infrastructure.embeddings.embedding_provider import EmbeddingProvider
 from app.infrastructure.ocr.vision_ocr import VisionOcr
 from app.infrastructure.vector_store.vector_store_manager import VectorStoreManager
 from app.services.embedding.document_embedding_service import DocumentEmbeddingService
+from app.services.retrieval.retrieval_service import RetrievalService
 from app.services.storage_service import StorageService
 
 
@@ -45,6 +46,15 @@ def get_document_embedding_service() -> DocumentEmbeddingService:
         vector_store_manager=get_vector_store_manager(),
         embedding_provider=get_embedding_provider(),
         ocr=get_vision_ocr(),
+    )
+
+
+@lru_cache
+def get_retrieval_service() -> RetrievalService:
+    return RetrievalService(
+        settings=get_settings(),
+        documents=get_document_embedding_service(),
+        storage_client=get_storage_client(),
     )
 
 

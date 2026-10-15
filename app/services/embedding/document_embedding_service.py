@@ -26,6 +26,9 @@ from app.services.rag.rag_service import RAGService
 
 logger = logging.getLogger(__name__)
 
+# Valor de metadata `source` de los documentos indexados desde texto plano.
+TEXT_INGESTION_SOURCE = "text_ingestion"
+
 
 class DocumentEmbeddingService:
     """Service de aplicacion para indexacion y consulta documental."""
@@ -371,6 +374,23 @@ class DocumentEmbeddingService:
         subido como blob `mtd6nyv4bjmnepck`, nunca como
         "Politica de privacidad ARA (prueba E2E).pdf").
         """
+        full_text = self._full_text(payload, file_cache)
+        if full_text is None:
+            return None
+
+        start_index = int(payload["start_index"])
+        end_index = int(payload["end_index"])
+        window = self._settings.rag_adjacent_window_chars
+        window_start = max(0, start_index - window)
+        window_end = min(len(full_text), end_index + window)
+        return full_text[window_start:window_end]
+
+    def _full_text(
+        self,
+        payload: dict[str, Any],
+        file_cache: dict[tuple[str, str | None], str],
+    ) -> str | None:
+        """Texto completo del documento de origen de un chunk (con cache por request)."""
         file_name = payload.get("file_name")
         unique_code = payload.get("unique_code")
         if not file_name or not unique_code:
@@ -379,17 +399,14 @@ class DocumentEmbeddingService:
         cache_key = (str(unique_code), str(bucket) if bucket else None)
         if cache_key not in file_cache:
             file_content = self._storage_client.download_from_bucket(unique_code, bucket)
-            file_cache[cache_key] = self._extract_text_from_file(
-                file_content, file_name, str(unique_code), bucket
-            )
-        full_text = file_cache[cache_key]
-
-        start_index = int(payload["start_index"])
-        end_index = int(payload["end_index"])
-        window = self._settings.rag_adjacent_window_chars
-        window_start = max(0, start_index - window)
-        window_end = min(len(full_text), end_index + window)
-        return full_text[window_start:window_end]
+            if payload.get("source") == TEXT_INGESTION_SOURCE:
+                # texto indexado via /ingestion/text: se guarda tal cual, sin extractor
+                file_cache[cache_key] = file_content.decode("utf-8", errors="ignore")
+            else:
+                file_cache[cache_key] = self._extract_text_from_file(
+                    file_content, file_name, str(unique_code), bucket
+                )
+        return file_cache[cache_key]
 
     def _expand_via_adjacent_chunk_index(
         self,
@@ -517,3 +534,98 @@ class DocumentEmbeddingService:
             f"{unique_code}_storage",
             bucket,
         )
+
+    # ------------------------------------------------------------------
+    # API publica para RetrievalService (rutas /retrieval, /ingestion, /extraction)
+    # ------------------------------------------------------------------
+    def rag_service_for(self, index_name: str) -> RAGService:
+        """``RAGService`` de la coleccion indicada (cacheado)."""
+        return self._get_rag_service(index_name)
+
+    def list_chunk_records(
+        self, index_name: str, limit: int, filter_conditions: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Registros crudos (id, vector, payload) de la particion del ambiente, sin busqueda vectorial."""
+        rag_service = self._get_rag_service(index_name)
+        return self._vector_store_manager.list_records(
+            rag_service.collection_name,
+            limit=limit,
+            filter_conditions=filter_conditions,
+            partition_name=rag_service.partition_name,
+        )
+
+    def extract_text(
+        self,
+        file_content: bytes,
+        file_name: str,
+        unique_code: str | None = None,
+        bucket: str | None = None,
+    ) -> str:
+        """Extrae texto con los mismos extractores/OCR/cache que la indexacion."""
+        return self._extract_text_from_file(file_content, file_name, unique_code, bucket)
+
+    def load_file(
+        self,
+        file_name: str,
+        base64_content: str | None,
+        url_download_file: str | None,
+        bucket: str | None,
+        unique_code: str | None = None,
+    ) -> bytes:
+        """Obtiene el binario desde base64, URL o storage (``unique_code`` es el nombre del blob)."""
+        return self._load_file_content(
+            file_name=unique_code if (unique_code and not base64_content) else file_name,
+            base64_content=base64_content,
+            url_download_file=url_download_file,
+            has_document_base64=bool(base64_content),
+            bucket=bucket,
+        )
+
+    def expand_results(
+        self, index_name: str, raw_results: list[dict[str, Any]]
+    ) -> list[str | None]:
+        """``expanded_text`` por resultado; ``None`` si no se pudo expandir (falla aislada)."""
+        file_cache: dict[tuple[str, str | None], str] = {}
+        expanded: list[str | None] = []
+        for raw in raw_results:
+            try:
+                expanded.append(self._expand_single_result(index_name, raw["payload"], file_cache))
+            except Exception:
+                logger.exception("fallo expandiendo contexto en %s", index_name)
+                expanded.append(None)
+        return expanded
+
+    def merge_context(self, index_name: str, raw_results: list[dict[str, Any]]) -> str:
+        """Une las ventanas de contexto por documento (las solapadas se funden en una)."""
+        file_cache: dict[tuple[str, str | None], str] = {}
+        window = self._settings.rag_adjacent_window_chars
+        groups: dict[tuple[str, str | None], list[dict[str, Any]]] = {}
+        for raw in raw_results:
+            payload = raw["payload"]
+            key = (str(payload.get("unique_code")), str(payload.get("bucket") or ""))
+            groups.setdefault(key, []).append(payload)
+
+        document_texts: list[str] = []
+        for payloads in groups.values():
+            full_text = None
+            if all(p.get("start_index") is not None for p in payloads):
+                try:
+                    full_text = self._full_text(payloads[0], file_cache)
+                except Exception:
+                    logger.exception("fallo leyendo documento para merge_context")
+            if full_text is None:  # sin offsets o sin archivo: se usa el texto de los chunks
+                texts = [p.get("text", "") for p in payloads]
+                document_texts.append("\n".join(t for t in texts if t))
+                continue
+            ranges = sorted(
+                (max(0, int(p["start_index"]) - window), min(len(full_text), int(p["end_index"]) + window))
+                for p in payloads
+            )
+            merged: list[list[int]] = []
+            for start, end in ranges:
+                if merged and start <= merged[-1][1]:
+                    merged[-1][1] = max(merged[-1][1], end)
+                else:
+                    merged.append([start, end])
+            document_texts.append("\n".join(full_text[a:b] for a, b in merged))
+        return "\n\n".join(t for t in document_texts if t)
