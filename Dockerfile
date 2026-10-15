@@ -9,6 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # (ver README.md "Estandar de calidad..." SS27, pendientes.md P-18/Trivy).
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends catdoc \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

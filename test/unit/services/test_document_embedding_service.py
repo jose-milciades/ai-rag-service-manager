@@ -9,6 +9,7 @@ import pytest
 from app.core.config import Settings
 from app.infrastructure.vector_store.vector_store_manager import VectorStoreManager
 from app.services.embedding.document_embedding_service import DocumentEmbeddingService
+from app.services.embedding.text_extractors import UnsupportedFormatError
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
@@ -521,34 +522,62 @@ class TestLoadFileContent:
 
 
 class TestExtractTextFromFile:
-    def test_txt_decoded(self) -> None:
-        result = DocumentEmbeddingService._extract_text_from_file(b"hello world", "doc.txt")
-        assert result == "hello world"
+    def test_txt_decoded(self, svc: DocumentEmbeddingService) -> None:
+        assert svc._extract_text_from_file(b"hello world", "doc.txt") == "hello world"
 
-    def test_json_decoded(self) -> None:
-        result = DocumentEmbeddingService._extract_text_from_file(b'{"key": "value"}', "data.json")
+    def test_json_decoded(self, svc: DocumentEmbeddingService) -> None:
+        result = svc._extract_text_from_file(b'{"key": "value"}', "data.json")
         assert result == '{"key": "value"}'
 
-    def test_md_decoded(self) -> None:
-        result = DocumentEmbeddingService._extract_text_from_file(b"# Title", "readme.md")
-        assert result == "# Title"
+    def test_md_decoded(self, svc: DocumentEmbeddingService) -> None:
+        assert svc._extract_text_from_file(b"# Title", "readme.md") == "# Title"
 
-    def test_pdf_calls_pdfplumber(self) -> None:
-        with patch("app.services.embedding.document_embedding_service.pdfplumber") as mock_pdf:
+    def test_pdf_calls_pdfplumber(self, svc: DocumentEmbeddingService) -> None:
+        with patch("app.services.embedding.text_extractors.pdfplumber") as mock_pdf:
             mock_page = Mock()
-            mock_page.extract_text.return_value = "extracted text"
+            mock_page.extract_text.return_value = "extracted text of the page"
             mock_pdf_obj = MagicMock()
             mock_pdf_obj.__enter__ = Mock(return_value=mock_pdf_obj)
             mock_pdf_obj.__exit__ = Mock(return_value=False)
             mock_pdf_obj.pages = [mock_page]
             mock_pdf.open.return_value = mock_pdf_obj
 
-            result = DocumentEmbeddingService._extract_text_from_file(b"%PDF-1.4", "doc.pdf")
-        assert result == "extracted text"
+            result = svc._extract_text_from_file(b"%PDF-1.4", "doc.pdf")
+        assert result == "extracted text of the page"
 
-    def test_unknown_extension_utf8_decode(self) -> None:
-        result = DocumentEmbeddingService._extract_text_from_file(b"raw text bytes", "doc.xyz")
-        assert result == "raw text bytes"
+    def test_unknown_extension_fails_explicitly(self, svc: DocumentEmbeddingService) -> None:
+        with pytest.raises(UnsupportedFormatError):
+            svc._extract_text_from_file(b"raw text bytes", "doc.xyz")
+
+    def test_scanned_pdf_uses_storage_text_cache_without_ocr(self, mock_settings: Settings) -> None:
+        storage = Mock()
+        storage.download_from_bucket.return_value = b"\n*page-break*\ntexto OCR previo"
+        service = _make_service(mock_settings, storage_client=storage)
+        result = service._extract_text_from_file(b"%PDF", "esc.pdf", "abc123", "bkt")
+        assert "texto OCR previo" in result
+        storage.download_from_bucket.assert_called_once_with("abc123_storage", "bkt")
+
+    def test_scanned_pdf_cache_miss_runs_ocr_and_writes_cache(
+        self, mock_settings: Settings
+    ) -> None:
+        storage = Mock()
+        storage.download_from_bucket.side_effect = FileNotFoundError
+        ocr = Mock()
+        ocr.enabled = True
+        ocr.ocr_pdf_pages.return_value = {1: "texto reconocido por OCR"}
+        service = _make_service(mock_settings, storage_client=storage)
+        service._ocr = ocr
+        with patch("app.services.embedding.text_extractors.pdfplumber") as mock_pdf:
+            page = Mock()
+            page.extract_text.return_value = None
+            pdf_obj = MagicMock()
+            pdf_obj.__enter__ = Mock(return_value=pdf_obj)
+            pdf_obj.__exit__ = Mock(return_value=False)
+            pdf_obj.pages = [page]
+            mock_pdf.open.return_value = pdf_obj
+            result = service._extract_text_from_file(b"%PDF", "esc.pdf", "abc123", "bkt")
+        assert result == "texto reconocido por OCR"
+        assert storage.upload_bytes.call_args.args[3] == "abc123_storage"
 
 
 # ---------------------------------------------------------------------------

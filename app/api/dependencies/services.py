@@ -4,6 +4,7 @@ from app.core.config import get_settings
 from app.infrastructure.clients.storage_client import StorageClient
 from app.infrastructure.clients.storage_config import StorageConfig
 from app.infrastructure.embeddings.embedding_provider import EmbeddingProvider
+from app.infrastructure.ocr.vision_ocr import VisionOcr
 from app.infrastructure.vector_store.vector_store_manager import VectorStoreManager
 from app.services.embedding.document_embedding_service import DocumentEmbeddingService
 from app.services.storage_service import StorageService
@@ -32,12 +33,18 @@ def get_storage_client() -> StorageClient:
 
 
 @lru_cache
+def get_vision_ocr() -> VisionOcr:
+    return VisionOcr(config=get_storage_config(), enabled=get_settings().rag_ocr_enabled)
+
+
+@lru_cache
 def get_document_embedding_service() -> DocumentEmbeddingService:
     return DocumentEmbeddingService(
         settings=get_settings(),
         storage_client=get_storage_client(),
         vector_store_manager=get_vector_store_manager(),
         embedding_provider=get_embedding_provider(),
+        ocr=get_vision_ocr(),
     )
 
 

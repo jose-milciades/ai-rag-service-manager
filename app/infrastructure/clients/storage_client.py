@@ -201,7 +201,7 @@ class StorageClient:
             return self._client
 
         try:
-            from google.cloud import storage
+            from google.cloud import storage  # type: ignore[attr-defined]
             from google.oauth2 import service_account
         except ImportError as exc:
             raise RuntimeError("google-cloud-storage is not installed") from exc

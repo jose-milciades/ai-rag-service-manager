@@ -13,16 +13,15 @@ Su papel principal es orquestar:
 """
 
 import base64
-import io
 import logging
 from typing import Any
-
-import pdfplumber
 
 from app.core.config import Settings
 from app.infrastructure.clients.storage_client import StorageClient
 from app.infrastructure.embeddings.embedding_provider import EmbeddingProvider
+from app.infrastructure.ocr.vision_ocr import VisionOcr
 from app.infrastructure.vector_store.vector_store_manager import VectorStoreManager
+from app.services.embedding.text_extractors import extract_text, needs_ocr
 from app.services.rag.rag_service import RAGService
 
 logger = logging.getLogger(__name__)
@@ -37,11 +36,13 @@ class DocumentEmbeddingService:
         storage_client: StorageClient,
         vector_store_manager: VectorStoreManager,
         embedding_provider: EmbeddingProvider,
+        ocr: VisionOcr | None = None,
     ) -> None:
         self._settings = settings
         self._storage_client = storage_client
         self._vector_store_manager = vector_store_manager
         self._embedding_provider = embedding_provider
+        self._ocr = ocr
         self._rag_services: dict[str, RAGService] = {}
 
     def _get_rag_service(self, index_name: str) -> RAGService:
@@ -75,7 +76,7 @@ class DocumentEmbeddingService:
             has_document_base64=has_document_base64,
             bucket=bucket,
         )
-        text_content = self._extract_text_from_file(file_content, file_name)
+        text_content = self._extract_text_from_file(file_content, file_name, unique_code, bucket)
         if not text_content.strip():
             raise ValueError("No text content could be extracted from the document")
 
@@ -378,7 +379,9 @@ class DocumentEmbeddingService:
         cache_key = (str(unique_code), str(bucket) if bucket else None)
         if cache_key not in file_cache:
             file_content = self._storage_client.download_from_bucket(unique_code, bucket)
-            file_cache[cache_key] = self._extract_text_from_file(file_content, file_name)
+            file_cache[cache_key] = self._extract_text_from_file(
+                file_content, file_name, str(unique_code), bucket
+            )
         full_text = file_cache[cache_key]
 
         start_index = int(payload["start_index"])
@@ -417,9 +420,7 @@ class DocumentEmbeddingService:
         chunk_count = self._settings.rag_adjacent_chunk_count
         target_range = range(int(chunk_index), int(chunk_index) + chunk_count + 1)
         adjacent = [
-            record
-            for record in records
-            if record["payload"].get("chunk_index") in target_range
+            record for record in records if record["payload"].get("chunk_index") in target_range
         ]
         if not adjacent:
             return None
@@ -465,38 +466,54 @@ class DocumentEmbeddingService:
             logger.warning("parametro %s con valor no entero, se ignora: %r", key, value)
             return None
 
-    @staticmethod
-    def _extract_text_from_file(file_content: bytes, file_name: str) -> str:
-        """Extrae texto de un archivo con una heuristica simple por extension."""
-        extension = file_name.lower().split(".")[-1]
-        if extension in {"txt", "md", "json", "csv", "py", "yaml", "yml", "html", "xml"}:
-            return file_content.decode("utf-8", errors="ignore")
-        if extension == "pdf":
-            return DocumentEmbeddingService._extract_text_from_pdf(file_content)
-        return file_content.decode("utf-8", errors="ignore")
+    def _extract_text_from_file(
+        self,
+        file_content: bytes,
+        file_name: str,
+        unique_code: str | None = None,
+        bucket: str | None = None,
+    ) -> str:
+        """Extrae texto segun el formato (ver ``text_extractors``).
 
-    @staticmethod
-    def _extract_text_from_pdf(file_content: bytes) -> str:
-        """Extrae el texto real de un PDF con contenido de texto (no escaneado).
-
-        Antes de esto, un PDF se trataba con
-        ``file_content.decode("latin-1", errors="ignore")`` -- decodificaba
-        los bytes crudos del archivo (streams comprimidos con FlateDecode,
-        tabla xref, anotaciones) como si fueran texto plano, en vez de
-        extraer el contenido real de las paginas. Confirmado real con una
-        prueba end-to-end (ver pendientes.md P-39): el texto indexado eran
-        objetos PDF binarios, no los parrafos del documento.
-
-        Usa `pdfplumber`, la misma libreria que usa `edi-ai-analysis-ai`
-        (`ReadTextBase64._read_text_pdf_without_images`) para el caso de
-        PDFs con texto real -- se mantiene el mismo separador de pagina
-        (``*page-break*``) por consistencia con ese formato ya conocido por
-        el resto del sistema. **No** se replica el resto de ese pipeline
-        (deteccion de PDF-solo-imagenes + OCR via Google Vision para
-        escaneados, ni DOC/PPT/XLS via Spire) -- fuera de alcance de este
-        fix puntual; un PDF escaneado (sin texto real en sus paginas) hoy
-        simplemente produce paginas vacias, no un error.
+        PDF e imagenes pueden requerir OCR (Google Vision, costo por pagina) y
+        el texto debe ser identico entre indexar y expandir contexto, asi que el
+        resultado se cachea en storage como ``<unique_code>_storage`` -- la misma
+        convencion que ya usaba ``edi-ai-analysis-ai`` (los documentos migrados ya
+        traen ese objeto, y no se vuelve a pagar OCR por ellos).
         """
-        with pdfplumber.open(io.BytesIO(file_content)) as pdf:
-            pages = [page.extract_text() or "" for page in pdf.pages]
-        return "\n*page-break*\n".join(pages)
+        use_cache = bool(unique_code) and needs_ocr(file_name)
+        if use_cache:
+            cached = self._read_text_cache(str(unique_code), bucket)
+            if cached is not None:
+                return cached
+        text = extract_text(
+            file_content,
+            file_name,
+            ocr=self._ocr,
+            min_chars_per_page=self._settings.rag_ocr_min_chars_per_page,
+            max_chars=self._settings.rag_max_text_chars,
+        )
+        if use_cache and text.strip():
+            self._write_text_cache(str(unique_code), bucket, text)
+        return text
+
+    def _read_text_cache(self, unique_code: str, bucket: str | None) -> str | None:
+        try:
+            data = self._storage_client.download_from_bucket(f"{unique_code}_storage", bucket)
+        except FileNotFoundError:
+            return None
+        except Exception:
+            logger.exception("no se pudo leer cache de texto de %s", unique_code)
+            return None
+        text = data.decode("utf-8", errors="ignore")
+        return text if text.strip() else None
+
+    def _write_text_cache(self, unique_code: str, bucket: str | None, text: str) -> None:
+        # Best effort: si falla, el siguiente intento volvera a extraer.
+        self._storage_client.upload_bytes(
+            text.encode("utf-8"),
+            None,
+            "text/plain",
+            f"{unique_code}_storage",
+            bucket,
+        )

@@ -206,6 +206,23 @@ class Settings(BaseSettings):
         default=100,
         validation_alias=AliasChoices("RAG_DEFAULT_LIST_LIMIT"),
     )
+    # Embeddings por lotes y extraccion de texto (ver PROPUESTA_ARREGLO_RAG.md).
+    rag_embedding_batch_size: int = Field(
+        default=128,
+        validation_alias=AliasChoices("RAG_EMBEDDING_BATCH_SIZE"),
+    )
+    rag_max_text_chars: int = Field(
+        default=3_000_000,
+        validation_alias=AliasChoices("RAG_MAX_TEXT_CHARS"),
+    )
+    rag_ocr_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("RAG_OCR_ENABLED"),
+    )
+    rag_ocr_min_chars_per_page: int = Field(
+        default=20,
+        validation_alias=AliasChoices("RAG_OCR_MIN_CHARS_PER_PAGE"),
+    )
     rag_max_embeddings_per_document: int = Field(
         default=1000,
         validation_alias=AliasChoices("RAG_MAX_EMBEDDINGS_PER_DOCUMENT"),

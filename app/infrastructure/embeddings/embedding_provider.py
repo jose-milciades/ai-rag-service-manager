@@ -51,7 +51,8 @@ class EmbeddingProvider:
                 "set RAG_OPENAI_EMBEDDING_DIMENSIONS explicitly."
             )
         self.dim = dim
-        self._client = OpenAI(api_key=settings.openai_api_key)
+        self._batch_size = max(1, settings.rag_embedding_batch_size)
+        self._client = OpenAI(api_key=settings.openai_api_key, max_retries=5)
         logger.info("using openai embedding model %s, dim=%s", self.model_name, self.dim)
 
     def _create_embeddings(self, texts: list[str]) -> list[list[float]]:
@@ -65,7 +66,12 @@ class EmbeddingProvider:
         """Genera embeddings para chunks de texto que se van a indexar."""
         if not texts:
             return []
-        return self._create_embeddings(texts)
+        # OpenAI limita cada peticion (<=2048 entradas y <=300000 tokens): se
+        # envia por lotes en vez de todos los chunks del documento de una vez.
+        embeddings: list[list[float]] = []
+        for start in range(0, len(texts), self._batch_size):
+            embeddings.extend(self._create_embeddings(texts[start : start + self._batch_size]))
+        return embeddings
 
     def embed_query(self, text: str) -> list[float]:
         """Genera el embedding de una consulta de busqueda."""
