@@ -481,7 +481,7 @@ class DocumentEmbeddingService:
         convencion que ya usaba ``edi-ai-analysis-ai`` (los documentos migrados ya
         traen ese objeto, y no se vuelve a pagar OCR por ellos).
         """
-        use_cache = bool(unique_code) and needs_ocr(file_name)
+        use_cache = bool(unique_code) and needs_ocr(file_name, file_content)
         if use_cache:
             cached = self._read_text_cache(str(unique_code), bucket)
             if cached is not None:

@@ -95,3 +95,23 @@ def test_pptx_soft_line_break_is_normalized():
     prs.save(buf)
     text = extract_text(buf.getvalue(), "a.pptx")
     assert "\x0b" not in text and "Linea uno" in text and "Linea dos" in text
+
+
+def test_pdf_with_wrong_extension_is_detected_by_content():
+    from unittest.mock import MagicMock, Mock, patch
+
+    with patch("app.services.embedding.text_extractors.pdfplumber") as mock_pdf:
+        page = Mock()
+        page.extract_text.return_value = "contenido real del pdf"
+        pdf_obj = MagicMock()
+        pdf_obj.__enter__ = Mock(return_value=pdf_obj)
+        pdf_obj.__exit__ = Mock(return_value=False)
+        pdf_obj.pages = [page]
+        mock_pdf.open.return_value = pdf_obj
+        assert "contenido real" in extract_text(b"%PDF-1.4 x", "Plan.pptx")
+        assert "contenido real" in extract_text(b"%PDF-1.3 x", "Gear_V1.7")
+    assert needs_ocr("Plan.pptx", b"%PDF-1.4")
+
+
+def test_zip_with_wrong_extension_is_detected_as_docx():
+    assert "Politica de privacidad" in extract_text(_docx_bytes(), "archivo.bin")

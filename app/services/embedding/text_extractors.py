@@ -47,7 +47,7 @@ def extract_text(
     max_chars: int | None = None,
 ) -> str:
     """Extrae texto del archivo segun su extension. ``ocr`` solo se usa si hace falta."""
-    ext = file_name.lower().rsplit(".", 1)[-1] if "." in file_name else ""
+    ext = _resolve_extension(content, file_name)
     if ext in _PLAIN_TEXT:
         text = content.decode("utf-8", errors="ignore")
     elif ext == "pdf":
@@ -76,10 +76,61 @@ def extract_text(
     return text
 
 
-def needs_ocr(file_name: str) -> bool:
+def needs_ocr(file_name: str, content: bytes | None = None) -> bool:
     """Formatos cuyo resultado puede depender de OCR (y por eso se cachea)."""
-    ext = file_name.lower().rsplit(".", 1)[-1] if "." in file_name else ""
+    ext = _resolve_extension(content, file_name)
     return ext == "pdf" or ext in _IMAGES
+
+
+def _resolve_extension(content: bytes | None, file_name: str) -> str:
+    """Extension efectiva: manda el contenido (firma) sobre el nombre.
+
+    Hay archivos con extension errada (un PDF llamado ``.pptx``) o sin
+    extension real (``Informe_V1.7``). ``analysis-ai`` los resolvia con
+    ``magic``; aqui se detectan por firma los formatos que se soportan.
+    """
+    by_name = file_name.lower().rsplit(".", 1)[-1] if "." in file_name else ""
+    if not content:
+        return by_name
+    detected = _sniff(content)
+    if detected is None or detected == by_name:
+        return by_name
+    # Un .docx/.xlsx/.pptx es un ZIP: solo se corrige si el nombre no es de OOXML.
+    if detected == "zip":
+        return by_name if by_name in {"docx", "xlsx", "pptx"} else _sniff_ooxml(content) or by_name
+    # OLE sirve para doc/xls/ppt: no se distingue por firma, se respeta el nombre.
+    if detected == "ole":
+        return by_name
+    logger.info("extension corregida por contenido: .%s -> .%s", by_name, detected)
+    return detected
+
+
+def _sniff(content: bytes) -> str | None:
+    head = content[:8]
+    if head.startswith(b"%PDF"):
+        return "pdf"
+    if head.startswith(b"PK\x03\x04"):
+        return "zip"
+    if head.startswith(b"\xd0\xcf\x11\xe0"):
+        return "ole"
+    if head.startswith(b"\x89PNG"):
+        return "png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    return None
+
+
+def _sniff_ooxml(content: bytes) -> str | None:
+    import zipfile
+
+    try:
+        names = zipfile.ZipFile(io.BytesIO(content)).namelist()
+    except zipfile.BadZipFile:
+        return None
+    for prefix, ext in (("word/", "docx"), ("xl/", "xlsx"), ("ppt/", "pptx")):
+        if any(n.startswith(prefix) for n in names):
+            return ext
+    return None
 
 
 def _readable_ratio(text: str) -> float:
