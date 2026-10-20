@@ -8,6 +8,7 @@ import ipaddress
 import logging
 import mimetypes
 import socket
+import time
 from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -125,6 +126,7 @@ class StorageClient:
         """Sube bytes a GCS replicando el flujo base de storage del micro Java."""
         blob = self._get_bucket(bucket_name).blob(storage_name)
         resolved_content_type = self._resolve_content_type(file_name, storage_name, content_type)
+        started = time.perf_counter()
         try:
             blob.upload_from_string(
                 file_bytes,
@@ -132,9 +134,20 @@ class StorageClient:
                 timeout=_UPLOAD_TIMEOUT_SECONDS,
                 retry=_upload_retry(),
             )
+            logger.info(
+                "gcs upload ok %s (%d bytes) in %.2fs",
+                storage_name,
+                len(file_bytes),
+                time.perf_counter() - started,
+            )
             return True
         except Exception as exc:  # noqa: BLE001 - operacion tecnica de GCS: la falla se convierte en success=False para el llamador
-            logger.error("storage upload failed for %s: %s", storage_name, exc)
+            logger.error(
+                "storage upload failed for %s after %.2fs: %s",
+                storage_name,
+                time.perf_counter() - started,
+                exc,
+            )
             return False
 
     def upload_public_bytes(
@@ -213,5 +226,22 @@ class StorageClient:
             client_kwargs["credentials"] = service_account.Credentials.from_service_account_info(
                 self._config.credentials_info
             )
-        self._client = storage.Client(**client_kwargs)
-        return self._client
+        client = storage.Client(**client_kwargs)
+        self._enlarge_http_pool(client)
+        self._client = client
+        return client
+
+    def _enlarge_http_pool(self, client: Any) -> None:
+        """Amplia el pool de conexiones HTTP de GCS (urllib3 usa 10 por defecto).
+
+        Las operaciones de storage corren en threads (asyncio.to_thread) y comparten un unico
+        cliente; con mas de 10 concurrentes urllib3 descarta conexiones ("Connection pool is
+        full, discarding connection") y debe re-abrir TLS cada vez.
+        """
+        from requests.adapters import HTTPAdapter
+
+        size = self._config.http_pool_size
+        # AuthorizedSession (client._http) es una requests.Session.
+        adapter = HTTPAdapter(pool_connections=size, pool_maxsize=size)
+        client._http.mount("https://", adapter)
+        client._http.mount("http://", adapter)

@@ -10,6 +10,7 @@ pendientes.md) -- integracion equivalente a
 import asyncio
 import base64
 import logging
+import time
 from base64 import b64encode
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,11 +85,18 @@ class StorageService:
         project_id: str | None,
         vectorization: VectorizationTrigger | None = None,
     ) -> UploadFileResponse:
+        started = time.perf_counter()
         try:
             file_bytes = await file.read()
         except Exception:
             logger.exception("failed to read uploaded file %r for storage upload", file.filename)
             return UploadFileResponse(success=False)
+        logger.info(
+            "storage upload: received %s (%d bytes) in %.2fs",
+            name,
+            len(file_bytes),
+            time.perf_counter() - started,
+        )
 
         # asyncio.to_thread: upload_bytes es una llamada sincrona y puede
         # tardar minutos con archivos grandes -- sin esto, bloquea el event
@@ -103,6 +111,12 @@ class StorageService:
             content_type=file.content_type,
             storage_name=name,
             bucket_name=bucket,
+        )
+        logger.info(
+            "storage upload: %s success=%s, total elapsed %.2fs",
+            name,
+            success,
+            time.perf_counter() - started,
         )
 
         # P-10 (pendientes.md): equivalente a

@@ -1,7 +1,11 @@
 import logging
 import os
 from contextvars import ContextVar
+from datetime import datetime
 from logging.config import dictConfig
+from zoneinfo import ZoneInfo
+
+from colorlog import ColoredFormatter
 
 from app.core.config import get_settings
 
@@ -18,6 +22,27 @@ class CorrelationIdFilter(logging.Filter):
         return True
 
 
+def _format_time_in_configured_tz(record: logging.LogRecord) -> str:
+    # Mismo criterio que now_mx() (app.core.utils): TIMEZONE, no la TZ del SO del contenedor
+    # (logging.Formatter.formatTime usa time.localtime y ignora TIMEZONE).
+    tz = ZoneInfo(os.getenv("TIMEZONE", "America/Mexico_City"))
+    return datetime.fromtimestamp(record.created, tz=tz).strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
+
+
+class TZAwareColoredFormatter(ColoredFormatter):
+    """ColoredFormatter cuyo asctime usa la zona horaria de TIMEZONE."""
+
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
+        return _format_time_in_configured_tz(record)
+
+
+class TZAwareFormatter(logging.Formatter):
+    """Formatter plano (archivo) cuyo asctime usa la zona horaria de TIMEZONE."""
+
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
+        return _format_time_in_configured_tz(record)
+
+
 def configure_logging() -> None:
     settings = get_settings()
     os.makedirs("logs", exist_ok=True)
@@ -32,7 +57,7 @@ def configure_logging() -> None:
             },
             "formatters": {
                 "default": {
-                    "()": "colorlog.ColoredFormatter",
+                    "()": TZAwareColoredFormatter,
                     "format": "%(log_color)s%(asctime)s | %(name)-25s | %(levelname)-8s | [%(correlation_id)s] | %(message)s",
                     "log_colors": {
                         "DEBUG": "cyan",
@@ -43,6 +68,7 @@ def configure_logging() -> None:
                     },
                 },
                 "file": {
+                    "()": TZAwareFormatter,
                     "format": "%(asctime)s [%(levelname)s] %(name)s [%(correlation_id)s]: %(message)s",
                 },
             },

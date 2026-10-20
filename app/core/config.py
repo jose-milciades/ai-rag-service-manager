@@ -115,6 +115,11 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("STORAGE_PUBLIC_BUCKET_NAME"),
     )
+    storage_http_pool_size: int = Field(
+        default=50,
+        ge=1,
+        validation_alias=AliasChoices("STORAGE_HTTP_POOL_SIZE"),
+    )
     storage_chunk_upload_temp_dir: str = Field(
         default=".runtime/uploads",
         validation_alias=AliasChoices("STORAGE_CHUNK_UPLOAD_TEMP_DIR"),

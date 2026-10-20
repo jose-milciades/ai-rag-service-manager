@@ -22,6 +22,7 @@ class StorageConfig:
         self.project_id = (
             settings.storage_project_id or self._get_project_id_from_credentials_info()
         )
+        self.http_pool_size = settings.storage_http_pool_size
         self.chunk_upload_temp_dir = settings.storage_chunk_upload_temp_dir
         self._validate_credentials_configuration()
 
