@@ -405,6 +405,103 @@ class TestGetFile:
 
 
 # ---------------------------------------------------------------------------
+# delete_file / get_storage_info
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteFile:
+    @pytest.mark.asyncio
+    async def test_existing_object_is_deleted(
+        self, mock_settings: Settings, tmp_path: Path
+    ) -> None:
+        sc = Mock()
+        sc.resolve_bucket_name.return_value = "my-bucket"
+        sc.delete_from_bucket.return_value = True
+        service = _make_service(mock_settings, tmp_path, storage_client=sc)
+
+        result = await service.delete_file("obj", "my-bucket")
+
+        assert result.deleted is True and result.existed is True
+        assert result.storage.bucket == "my-bucket"
+        assert result.storage.provider == "GCS"
+        assert result.storage.environment == mock_settings.rag_environment
+        sc.delete_from_bucket.assert_called_once_with(filename="obj", bucket_name="my-bucket")
+
+    @pytest.mark.asyncio
+    async def test_missing_object_is_idempotent_not_an_error(
+        self, mock_settings: Settings, tmp_path: Path
+    ) -> None:
+        sc = Mock()
+        sc.resolve_bucket_name.return_value = "my-bucket"
+        sc.delete_from_bucket.return_value = False
+        service = _make_service(mock_settings, tmp_path, storage_client=sc)
+
+        result = await service.delete_file("gone", None)
+
+        assert result.deleted is False and result.existed is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("name", ["", "   "])
+    async def test_blank_name_raises_400(
+        self, mock_settings: Settings, tmp_path: Path, name: str
+    ) -> None:
+        from fastapi import HTTPException
+
+        sc = Mock()
+        service = _make_service(mock_settings, tmp_path, storage_client=sc)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await service.delete_file(name, "b")
+        assert exc_info.value.status_code == 400
+        sc.delete_from_bucket.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_bucket_available_raises_400(
+        self, mock_settings: Settings, tmp_path: Path
+    ) -> None:
+        from fastapi import HTTPException
+
+        sc = Mock()
+        sc.resolve_bucket_name.return_value = None
+        service = _make_service(mock_settings, tmp_path, storage_client=sc)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await service.delete_file("obj", None)
+        assert exc_info.value.status_code == 400
+        sc.delete_from_bucket.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_storage_failure_raises_500(
+        self, mock_settings: Settings, tmp_path: Path
+    ) -> None:
+        from fastapi import HTTPException
+
+        sc = Mock()
+        sc.resolve_bucket_name.return_value = "b"
+        sc.delete_from_bucket.side_effect = RuntimeError("gcs down")
+        service = _make_service(mock_settings, tmp_path, storage_client=sc)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await service.delete_file("obj", None)
+        assert exc_info.value.status_code == 500
+
+
+class TestGetStorageInfo:
+    def test_returns_provider_bucket_and_environment(
+        self, mock_settings: Settings, tmp_path: Path
+    ) -> None:
+        sc = Mock()
+        sc.resolve_bucket_name.return_value = "default-bucket"
+        service = _make_service(mock_settings, tmp_path, storage_client=sc)
+
+        info = service.get_storage_info()
+
+        assert info.provider == "GCS"
+        assert info.bucket == "default-bucket"
+        assert info.environment == mock_settings.rag_environment
+
+
+# ---------------------------------------------------------------------------
 # get_file_byte
 # ---------------------------------------------------------------------------
 

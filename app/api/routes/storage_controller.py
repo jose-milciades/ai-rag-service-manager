@@ -8,7 +8,9 @@ from fastapi.responses import StreamingResponse
 from app.api.dependencies.services import get_storage_service
 from app.schemas.storage import (
     ChunkUploadResponse,
+    DeleteFileResponse,
     FileResponse,
+    StorageInfoResponse,
     UploadFileResponse,
     UploadPublicFileResponse,
 )
@@ -127,6 +129,21 @@ async def get_file_byte(
     service: StorageServiceDep,
 ) -> FileResponse:
     return await service.get_file_byte(name=name, bucket=bucket)
+
+
+@router.get("/info", status_code=status.HTTP_200_OK, response_model=StorageInfoResponse)
+async def get_storage_info(*, service: StorageServiceDep) -> StorageInfoResponse:
+    return service.get_storage_info()
+
+
+@router.delete("", status_code=status.HTTP_200_OK, response_model=DeleteFileResponse)
+async def delete_file(
+    *,
+    name: str = Query(...),
+    bucket: str | None = Query(default=None),
+    service: StorageServiceDep,
+) -> DeleteFileResponse:
+    return await service.delete_file(name=name, bucket=bucket)
 
 
 @router.post(

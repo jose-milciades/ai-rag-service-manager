@@ -115,6 +115,27 @@ class StorageClient:
         blob.reload()
         return blob.download_as_bytes(), blob.content_type
 
+    def resolve_bucket_name(self, bucket_name: str | None = None) -> str | None:
+        """Bucket efectivo: el indicado o, si no viene, el por defecto configurado."""
+        return bucket_name or self._config.default_bucket_name
+
+    def delete_from_bucket(self, filename: str, bucket_name: str | None = None) -> bool:
+        """Elimina un objeto de GCS. Retorna True si existia y se borro, False si ya no existia.
+
+        Idempotente: un objeto inexistente (404) no es error, el llamador decide como tratarlo.
+        Cualquier otra falla (red, permisos, 5xx) se propaga para que no se confunda con "no existia".
+        """
+        from google.api_core.exceptions import NotFound
+
+        blob = self._get_bucket(bucket_name).blob(filename)
+        try:
+            blob.delete()
+        except NotFound:
+            logger.info("storage delete: %s not found in bucket %s", filename, blob.bucket.name)
+            return False
+        logger.info("storage delete: %s deleted from bucket %s", filename, blob.bucket.name)
+        return True
+
     def upload_bytes(
         self,
         file_bytes: bytes,

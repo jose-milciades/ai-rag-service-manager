@@ -23,7 +23,9 @@ from app.infrastructure.clients.storage_client import StorageClient
 from app.infrastructure.clients.storage_config import StorageConfig
 from app.schemas.storage import (
     ChunkUploadResponse,
+    DeleteFileResponse,
     FileResponse,
+    StorageInfoResponse,
     UploadFileResponse,
     UploadPublicFileResponse,
 )
@@ -261,6 +263,53 @@ class StorageService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Error getting file",
             ) from exc
+
+    _STORAGE_PROVIDER = "GCS"
+
+    def get_storage_info(self) -> StorageInfoResponse:
+        """Storage al que se conecta este servicio; lo usan los jobs para verificar ambiente/bucket."""
+        return StorageInfoResponse(
+            provider=self._STORAGE_PROVIDER,
+            bucket=self._storage_client.resolve_bucket_name(None),
+            environment=self._settings.rag_environment,
+        )
+
+    async def delete_file(self, name: str, bucket: str | None) -> DeleteFileResponse:
+        """Elimina un objeto del storage. Idempotente: si no existe responde ``existed=false``."""
+        if not name or not name.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="name is required",
+            )
+        resolved_bucket = self._storage_client.resolve_bucket_name(bucket)
+        if not resolved_bucket:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="bucket is required (no default bucket configured)",
+            )
+        try:
+            # asyncio.to_thread: misma razon que get_file()/upload_file(): la llamada a GCS es
+            # sincrona y bloquearia el event loop de uvicorn.
+            existed = await asyncio.to_thread(
+                self._storage_client.delete_from_bucket,
+                filename=name,
+                bucket_name=resolved_bucket,
+            )
+        except Exception as exc:
+            logger.exception("failed to delete %r from bucket %r", name, resolved_bucket)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Error deleting file",
+            ) from exc
+        return DeleteFileResponse(
+            deleted=existed,
+            existed=existed,
+            storage=StorageInfoResponse(
+                provider=self._STORAGE_PROVIDER,
+                bucket=resolved_bucket,
+                environment=self._settings.rag_environment,
+            ),
+        )
 
     async def get_file_byte(self, name: str, bucket: str | None) -> FileResponse:
         file_bytes, content_type = await self.get_file(name=name, bucket=bucket)

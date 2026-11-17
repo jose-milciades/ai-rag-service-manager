@@ -261,3 +261,58 @@ class TestStartupEvent:
         # Force _get_client to raise; startup_event must swallow it
         with patch.object(client, "_get_bucket", side_effect=RuntimeError("gcs down")):
             client.startup_event()  # must not propagate
+
+
+# ---------------------------------------------------------------------------
+# delete_from_bucket / resolve_bucket_name
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteFromBucket:
+    def _client_with_blob(self, blob: MagicMock) -> StorageClient:
+        client = StorageClient(make_config())
+        blob.bucket.name = "default-bucket"
+        mock_bucket = MagicMock()
+        mock_bucket.blob.return_value = blob
+        mock_gcs = MagicMock()
+        mock_gcs.bucket.return_value = mock_bucket
+        client._client = mock_gcs
+        return client
+
+    def test_existing_blob_is_deleted_returns_true(self) -> None:
+        blob = MagicMock()
+        client = self._client_with_blob(blob)
+        assert client.delete_from_bucket("file.txt") is True
+        blob.delete.assert_called_once()
+
+    def test_missing_blob_returns_false(self) -> None:
+        from google.api_core.exceptions import NotFound
+
+        blob = MagicMock()
+        blob.delete.side_effect = NotFound("gone")
+        client = self._client_with_blob(blob)
+        assert client.delete_from_bucket("missing.txt") is False
+
+    def test_other_errors_propagate(self) -> None:
+        blob = MagicMock()
+        blob.delete.side_effect = RuntimeError("gcs 503")
+        client = self._client_with_blob(blob)
+        with pytest.raises(RuntimeError, match="gcs 503"):
+            client.delete_from_bucket("file.txt")
+
+    def test_explicit_bucket_is_used(self) -> None:
+        blob = MagicMock()
+        client = self._client_with_blob(blob)
+        client.delete_from_bucket("file.txt", "other-bucket")
+        client._client.bucket.assert_called_once_with("other-bucket")
+
+
+class TestResolveBucketName:
+    def test_explicit_bucket_wins(self) -> None:
+        assert StorageClient(make_config()).resolve_bucket_name("x") == "x"
+
+    def test_falls_back_to_default(self) -> None:
+        assert StorageClient(make_config(default_bucket="d")).resolve_bucket_name(None) == "d"
+
+    def test_none_when_nothing_configured(self) -> None:
+        assert StorageClient(make_config(default_bucket=None)).resolve_bucket_name(None) is None

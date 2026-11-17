@@ -35,3 +35,21 @@ class FileResponse(BaseModel):
     extension: str | None = Field(default=None)
     name: str | None = Field(default=None)
     base64: str | None = Field(default=None)
+
+
+class StorageInfoResponse(BaseModel):
+    """Storage al que esta conectado el servicio (sin secretos)."""
+
+    model_config = get_camel_case_config()
+
+    provider: str = Field(..., description="Proveedor de storage (GCS)")
+    bucket: str | None = Field(default=None, description="Bucket por defecto configurado")
+    environment: str = Field(..., description="RAG_ENVIRONMENT del servicio")
+
+
+class DeleteFileResponse(BaseModel):
+    model_config = get_camel_case_config()
+
+    deleted: bool = Field(..., description="true si el objeto existia y se elimino")
+    existed: bool = Field(..., description="false si el objeto ya no existia (404, idempotente)")
+    storage: StorageInfoResponse = Field(..., description="Storage efectivamente usado")

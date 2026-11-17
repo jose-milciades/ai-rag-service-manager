@@ -10,7 +10,9 @@ from fastapi.testclient import TestClient
 from app.api.dependencies.services import get_storage_service
 from app.schemas.storage import (
     ChunkUploadResponse,
+    DeleteFileResponse,
     FileResponse,
+    StorageInfoResponse,
     UploadFileResponse,
     UploadPublicFileResponse,
 )
@@ -33,6 +35,11 @@ def storage_service_mock() -> Mock:
     svc.upload_public_file = AsyncMock(
         return_value=UploadPublicFileResponse(success=True, url="https://example.com/file.txt")
     )
+    storage = StorageInfoResponse(provider="GCS", bucket="b", environment="edi-local")
+    svc.delete_file = AsyncMock(
+        return_value=DeleteFileResponse(deleted=True, existed=True, storage=storage)
+    )
+    svc.get_storage_info = Mock(return_value=storage)
     return svc
 
 
@@ -300,3 +307,36 @@ def test_upload_public_file_failure_response(
     body = response.json()
     assert body["success"] is False
     assert body["url"] is None
+
+
+# ---------------------------------------------------------------------------
+# delete_file  DELETE /storage   |   storage_info  GET /storage/info
+# ---------------------------------------------------------------------------
+
+
+def test_delete_file_ok(client_with_storage: TestClient, storage_service_mock: Mock) -> None:
+    response = client_with_storage.delete("/api/v1/storage", params={"name": "obj", "bucket": "b"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["deleted"] is True
+    assert body["existed"] is True
+    assert body["storage"] == {"provider": "GCS", "bucket": "b", "environment": "edi-local"}
+    storage_service_mock.delete_file.assert_awaited_once_with(name="obj", bucket="b")
+
+
+def test_delete_file_bucket_is_optional(
+    client_with_storage: TestClient, storage_service_mock: Mock
+) -> None:
+    response = client_with_storage.delete("/api/v1/storage", params={"name": "obj"})
+    assert response.status_code == 200
+    storage_service_mock.delete_file.assert_awaited_once_with(name="obj", bucket=None)
+
+
+def test_delete_file_requires_name(client_with_storage: TestClient) -> None:
+    assert client_with_storage.delete("/api/v1/storage").status_code == 422
+
+
+def test_storage_info_ok(client_with_storage: TestClient) -> None:
+    response = client_with_storage.get("/api/v1/storage/info")
+    assert response.status_code == 200
+    assert response.json() == {"provider": "GCS", "bucket": "b", "environment": "edi-local"}

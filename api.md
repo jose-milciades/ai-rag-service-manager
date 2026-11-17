@@ -311,6 +311,30 @@ Igual que `/get`, pero devuelve el contenido codificado en base64 dentro de un J
 
 > Nota: `arrayBytes`, `extension` y `name` están definidos en el schema pero el service actual nunca los completa (siempre `null`).
 
+### `DELETE /api/v1/storage`
+
+Elimina **un** objeto del bucket. Lo usa el job `delete_inactive_documents_storage` de `edi-ai-scheduled-worker` (vía `edi-ai-proyectos-backend`; ver `docs/jobs/delete-inactive-document-in-storage/PLAN.md` en ese repo). Idempotente: un objeto que ya no existe **no es error**.
+
+**Query params:** `name` (requerido, no vacío — `400` si viene en blanco), `bucket` (opcional — usa `storage_default_bucket_name` si se omite; `400` si tampoco hay default).
+
+**Respuesta 200** — `DeleteFileResponse`:
+
+```json
+{
+  "deleted": true,
+  "existed": true,
+  "storage": { "provider": "GCS", "bucket": "server_edi_bucket", "environment": "edi-prod" }
+}
+```
+
+`deleted == existed`: `true` si el objeto existía y se eliminó; `false` si GCS respondió 404 (ya no existía). `storage` es el bucket efectivamente usado. Cualquier otra falla de GCS (red, permisos, 5xx) responde `500` — no se confunde con "no existía". Un `404` de GCS **no** se traduce a HTTP 404 en este endpoint.
+
+### `GET /api/v1/storage/info`
+
+Storage al que está conectado el servicio, sin secretos. Sirve de *preflight* para que un job verifique que apunta al ambiente/bucket esperado antes de operar.
+
+**Respuesta 200** — `StorageInfoResponse`: `{ "provider": "GCS", "bucket": "<storage_default_bucket_name | null>", "environment": "<RAG_ENVIRONMENT>" }`.
+
 ### `POST /api/v1/storage/public-upload`
 
 `multipart/form-data`. Sube un archivo al bucket **público** configurado y retorna su URL pública.
