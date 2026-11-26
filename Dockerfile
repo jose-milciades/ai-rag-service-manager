@@ -34,4 +34,4 @@ USER appuser
 
 EXPOSE 8000
 
-CMD ["uv", "run", "python", "-m", "app.main"]
+CMD ["uv", "run", "opentelemetry-instrument", "python", "-m", "app.main"]

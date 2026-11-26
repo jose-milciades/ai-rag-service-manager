@@ -38,6 +38,12 @@ dependencies = [
   # (a diferencia de pymilvus, con ignore_missing_imports). Fijado por
   # debajo de 2.5 hasta el upgrade a Python 3.12 de P-18.
   "numpy<2.5.0",
+  "opentelemetry-distro>=0.66b2",
+  "opentelemetry-exporter-otlp-proto-http>=1.45.2",
+  "opentelemetry-instrumentation-fastapi>=0.66b2",
+  "opentelemetry-instrumentation-httpx>=0.66b2",
+  "opentelemetry-instrumentation-requests>=0.66b2",
+  "opentelemetry-instrumentation-grpc>=0.66b2",
 ]
 
 [project.optional-dependencies]
