@@ -254,11 +254,13 @@ class StorageService:
                 bucket_name=bucket,
             )
         except FileNotFoundError as exc:
+            logger.warning("storage get: %r not found (bucket=%r)", name, bucket)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="File not found",
             ) from exc
         except Exception as exc:
+            logger.exception("storage get failed for %r (bucket=%r)", name, bucket)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Error getting file",

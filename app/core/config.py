@@ -120,6 +120,36 @@ class Settings(BaseSettings):
         ge=1,
         validation_alias=AliasChoices("STORAGE_HTTP_POOL_SIZE"),
     )
+    storage_download_connect_timeout_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        validation_alias=AliasChoices("STORAGE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS"),
+    )
+    storage_download_read_timeout_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        validation_alias=AliasChoices("STORAGE_DOWNLOAD_READ_TIMEOUT_SECONDS"),
+    )
+    storage_download_retry_deadline_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        validation_alias=AliasChoices("STORAGE_DOWNLOAD_RETRY_DEADLINE_SECONDS"),
+    )
+    storage_tcp_keepalive_idle_seconds: int = Field(
+        default=30,
+        ge=1,
+        validation_alias=AliasChoices("STORAGE_TCP_KEEPALIVE_IDLE_SECONDS"),
+    )
+    storage_tcp_keepalive_interval_seconds: int = Field(
+        default=10,
+        ge=1,
+        validation_alias=AliasChoices("STORAGE_TCP_KEEPALIVE_INTERVAL_SECONDS"),
+    )
+    storage_tcp_keepalive_probes: int = Field(
+        default=3,
+        ge=1,
+        validation_alias=AliasChoices("STORAGE_TCP_KEEPALIVE_PROBES"),
+    )
     storage_chunk_upload_temp_dir: str = Field(
         default=".runtime/uploads",
         validation_alias=AliasChoices("STORAGE_CHUNK_UPLOAD_TEMP_DIR"),

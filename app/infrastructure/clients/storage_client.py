@@ -39,6 +39,30 @@ def _upload_retry() -> Any:
     return Retry(deadline=_UPLOAD_RETRY_DEADLINE_SECONDS)
 
 
+def _download_retry(deadline_seconds: float) -> Any:
+    from google.api_core.retry import Retry
+
+    return Retry(deadline=deadline_seconds)
+
+
+def _keepalive_socket_options(
+    idle_seconds: int, interval_seconds: int, probes: int
+) -> list[tuple[int, int, int]]:
+    """Opciones de socket con TCP keepalive (las constantes TCP_KEEP* son solo Linux)."""
+    options = [
+        (socket.IPPROTO_TCP, socket.TCP_NODELAY, 1),
+        (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1),
+    ]
+    for name, value in (
+        ("TCP_KEEPIDLE", idle_seconds),
+        ("TCP_KEEPINTVL", interval_seconds),
+        ("TCP_KEEPCNT", probes),
+    ):
+        if hasattr(socket, name):
+            options.append((socket.IPPROTO_TCP, getattr(socket, name), value))
+    return options
+
+
 def _ensure_public_http_url(url: str) -> None:
     """Bloquea esquemas y destinos que habilitarian SSRF via descarga remota.
 
@@ -94,26 +118,37 @@ class StorageClient:
 
     def download_from_bucket(self, filename: str, bucket_name: str | None = None) -> bytes:
         """Descarga un archivo desde GCS y retorna su contenido binario."""
-        blob = self._get_bucket(bucket_name).blob(filename)
-        if not blob.exists():
-            raise FileNotFoundError(f"File {filename} not found in bucket {blob.bucket.name}")
-
-        logger.info("downloading %s from bucket %s", filename, blob.bucket.name)
-        return blob.download_as_bytes()
+        content, _ = self.download_with_metadata(filename, bucket_name)
+        return content
 
     def download_with_metadata(
         self,
         filename: str,
         bucket_name: str | None = None,
     ) -> tuple[bytes, str | None]:
-        """Descarga un archivo desde GCS junto con su content type."""
-        blob = self._get_bucket(bucket_name).blob(filename)
-        if not blob.exists():
-            raise FileNotFoundError(f"File {filename} not found in bucket {blob.bucket.name}")
+        """Descarga un archivo desde GCS junto con su content type.
 
-        logger.info("downloading %s with metadata from bucket %s", filename, blob.bucket.name)
-        blob.reload()
-        return blob.download_as_bytes(), blob.content_type
+        ``get_blob`` consulta existencia y metadata en una sola llamada (antes eran
+        exists + reload). Todas las llamadas llevan timeout y deadline de reintento
+        acotados, y se loguea la duracion para detectar descargas lentas.
+        """
+        start = time.perf_counter()
+        bucket = self._get_bucket(bucket_name)
+        retry = _download_retry(self._config.download_retry_deadline)
+        logger.info("downloading %s from bucket %s", filename, bucket.name)
+        blob = bucket.get_blob(filename, timeout=self._config.download_timeout, retry=retry)
+        if blob is None:
+            raise FileNotFoundError(f"File {filename} not found in bucket {bucket.name}")
+
+        content = blob.download_as_bytes(timeout=self._config.download_timeout, retry=retry)
+        logger.info(
+            "downloaded %s (%d bytes) from bucket %s in %.2fs",
+            filename,
+            len(content),
+            bucket.name,
+            time.perf_counter() - start,
+        )
+        return content, blob.content_type
 
     def resolve_bucket_name(self, bucket_name: str | None = None) -> str | None:
         """Bucket efectivo: el indicado o, si no viene, el por defecto configurado."""
@@ -262,7 +297,18 @@ class StorageClient:
         from requests.adapters import HTTPAdapter
 
         size = self._config.http_pool_size
+        socket_options = _keepalive_socket_options(
+            self._config.tcp_keepalive_idle,
+            self._config.tcp_keepalive_interval,
+            self._config.tcp_keepalive_probes,
+        )
+
+        class _KeepAliveAdapter(HTTPAdapter):
+            def init_poolmanager(self, *args: Any, **kwargs: Any) -> None:
+                kwargs["socket_options"] = socket_options
+                super().init_poolmanager(*args, **kwargs)
+
         # AuthorizedSession (client._http) es una requests.Session.
-        adapter = HTTPAdapter(pool_connections=size, pool_maxsize=size)
+        adapter = _KeepAliveAdapter(pool_connections=size, pool_maxsize=size)
         client._http.mount("https://", adapter)
         client._http.mount("http://", adapter)

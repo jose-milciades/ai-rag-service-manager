@@ -23,6 +23,14 @@ class StorageConfig:
             settings.storage_project_id or self._get_project_id_from_credentials_info()
         )
         self.http_pool_size = settings.storage_http_pool_size
+        self.download_timeout = (
+            settings.storage_download_connect_timeout_seconds,
+            settings.storage_download_read_timeout_seconds,
+        )
+        self.download_retry_deadline = settings.storage_download_retry_deadline_seconds
+        self.tcp_keepalive_idle = settings.storage_tcp_keepalive_idle_seconds
+        self.tcp_keepalive_interval = settings.storage_tcp_keepalive_interval_seconds
+        self.tcp_keepalive_probes = settings.storage_tcp_keepalive_probes
         self.chunk_upload_temp_dir = settings.storage_chunk_upload_temp_dir
         self._validate_credentials_configuration()
 
